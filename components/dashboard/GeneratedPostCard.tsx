@@ -1,0 +1,230 @@
+import CopyButton from "@/components/dashboard/CopyButton";
+import PostStatusBadge from "@/components/dashboard/PostStatusBadge";
+import PublishPostButton from "@/components/dashboard/PublishPostButton";
+import RetryPostButton from "@/components/dashboard/RetryPostButton";
+import SchedulePostForm from "@/components/dashboard/SchedulePostForm";
+import type { GeneratedPost } from "@/lib/types";
+import { formatDateTimeVi, isDue } from "@/lib/utils/date";
+
+/** Định dạng ngày dạng dd/MM/yyyy (tránh lệch locale). */
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear()}`;
+}
+
+/** Rút gọn link để hiển thị (bỏ scheme, cắt bớt nếu dài). */
+function shortenLink(url: string): string {
+  const noScheme = url.replace(/^https?:\/\//i, "");
+  return noScheme.length > 48 ? `${noScheme.slice(0, 48)}…` : noScheme;
+}
+
+/** Nhãn trạng thái lịch đăng để người dùng dễ hiểu. */
+function scheduleStateLabel(post: GeneratedPost): {
+  text: string;
+  className: string;
+} {
+  switch (post.status) {
+    case "PUBLISHED":
+      return { text: "Đã đăng", className: "bg-blue-50 text-blue-700" };
+    case "REJECTED":
+      return { text: "Bị từ chối", className: "bg-red-50 text-red-700" };
+    case "READY":
+      if (!post.scheduled_at) {
+        return {
+          text: "Sẵn sàng, chưa lên lịch",
+          className: "bg-amber-50 text-amber-700",
+        };
+      }
+      return isDue(post.scheduled_at)
+        ? { text: "Đến hạn đăng", className: "bg-orange-50 text-orange-700" }
+        : { text: "Đã lên lịch", className: "bg-green-50 text-green-700" };
+    default:
+      return { text: "", className: "" };
+  }
+}
+
+function MetaItem({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">
+        {label}
+      </span>
+      <span className="text-sm font-medium text-gray-800">{children}</span>
+    </div>
+  );
+}
+
+export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
+  const productName = post.products?.product_name ?? "Sản phẩm không xác định";
+  const affiliateLink = post.products?.affiliate_link ?? null;
+  const stateLabel = scheduleStateLabel(post);
+
+  return (
+    <article className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      {/* Header */}
+      <div className="border-b border-gray-100 bg-gray-50/60 px-5 py-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h3 className="truncate text-base font-semibold text-gray-900">
+              {productName}
+            </h3>
+            {affiliateLink ? (
+              <a
+                href={affiliateLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-0.5 inline-block max-w-full truncate text-xs text-blue-600 hover:underline"
+                title={affiliateLink}
+              >
+                🔗 {shortenLink(affiliateLink)}
+              </a>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {stateLabel.text ? (
+              <span
+                className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${stateLabel.className}`}
+              >
+                {stateLabel.text}
+              </span>
+            ) : null}
+            <PostStatusBadge status={post.status} />
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <MetaItem label="Điểm AI">{post.ai_score ?? "—"}</MetaItem>
+          <MetaItem label="Nên đăng">
+            {post.should_publish ? (
+              <span className="text-green-600">Có</span>
+            ) : (
+              <span className="text-gray-400">Không</span>
+            )}
+          </MetaItem>
+          <MetaItem label="Ngày tạo">{formatDate(post.created_at)}</MetaItem>
+          <MetaItem label="Lịch đăng">
+            {post.scheduled_at ? formatDateTimeVi(post.scheduled_at) : "Chưa lên lịch"}
+          </MetaItem>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="space-y-4 px-5 py-4">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+            Hook
+          </p>
+          <p className="mt-1 text-sm font-medium text-gray-900">
+            {post.hook ?? "—"}
+          </p>
+        </div>
+
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+            Caption
+          </p>
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-800">
+            {post.caption ?? "—"}
+          </p>
+        </div>
+
+        {post.safety_notes ? (
+          <div className="rounded-lg bg-amber-50 px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600">
+              Ghi chú an toàn
+            </p>
+            <p className="mt-0.5 text-sm text-amber-800">{post.safety_notes}</p>
+          </div>
+        ) : null}
+
+        {/* Actions */}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <CopyButton text={post.caption ?? ""} />
+          {affiliateLink ? (
+            <a
+              href={affiliateLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+            >
+              🔗 Xem link sản phẩm
+            </a>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Đăng Facebook */}
+      <div className="border-t border-gray-100 px-5 py-4">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+          Đăng Facebook
+        </p>
+        {post.status === "PUBLISHED" ? (
+          <div className="text-sm">
+            <p className="text-green-700">
+              ✓ Đã đăng lúc {formatDateTimeVi(post.published_at)}
+            </p>
+            {post.facebook_post_url ? (
+              <a
+                href={post.facebook_post_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-xs text-blue-600 underline hover:text-blue-700"
+              >
+                Mở bài Facebook
+              </a>
+            ) : null}
+          </div>
+        ) : post.status === "PUBLISHING" ? (
+          <p className="text-sm text-indigo-700">
+            ⏳ Bài đang được hệ thống xử lý.
+          </p>
+        ) : post.status === "FAILED" ? (
+          <div>
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+              <p className="text-xs font-semibold text-red-700">Đăng thất bại</p>
+              <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-red-700">
+                {post.error_log ?? "Không rõ lỗi."}
+              </p>
+            </div>
+            <RetryPostButton postId={post.id} />
+          </div>
+        ) : post.status === "REJECTED" ? (
+          <p className="text-sm text-gray-500">Bài bị từ chối, không thể đăng.</p>
+        ) : (
+          <PublishPostButton
+            postId={post.id}
+            status={post.status}
+            shouldPublish={post.should_publish}
+            aiScore={post.ai_score}
+            caption={post.caption}
+          />
+        )}
+      </div>
+
+      {/* Lịch đăng */}
+      <div className="border-t border-gray-100 px-5 py-4">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+          Lịch đăng
+        </p>
+        {post.status === "REJECTED" ? (
+          <p className="text-sm text-red-600">
+            Bài bị từ chối, cần tạo lại caption.
+          </p>
+        ) : post.status === "PUBLISHING" ? (
+          <p className="text-sm text-gray-500">
+            Bài đang được hệ thống xử lý, không thể đổi lịch.
+          </p>
+        ) : (
+          <SchedulePostForm
+            postId={post.id}
+            currentScheduledAt={post.scheduled_at}
+            status={post.status}
+          />
+        )}
+      </div>
+    </article>
+  );
+}

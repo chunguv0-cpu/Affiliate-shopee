@@ -1,0 +1,123 @@
+import Link from "next/link";
+
+import EmptyState from "@/components/dashboard/EmptyState";
+import PostStatusBadge from "@/components/dashboard/PostStatusBadge";
+import { getScheduledPosts } from "@/app/dashboard/posts/actions";
+import type { GeneratedPost } from "@/lib/types";
+import { formatDateTimeVi, isDue } from "@/lib/utils/date";
+
+// Luôn lấy dữ liệu mới từ database.
+export const dynamic = "force-dynamic";
+
+function ScheduledItem({ post }: { post: GeneratedPost }) {
+  const due = isDue(post.scheduled_at);
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium ${
+                due ? "bg-orange-50 text-orange-700" : "bg-green-50 text-green-700"
+              }`}
+            >
+              🕒 {formatDateTimeVi(post.scheduled_at)}
+            </span>
+            <PostStatusBadge status={post.status} />
+          </div>
+          <p className="mt-2 font-medium text-gray-900">
+            {post.products?.product_name ?? "Sản phẩm không xác định"}
+          </p>
+          <p className="mt-1 line-clamp-2 text-sm text-gray-600">
+            {post.caption ?? "—"}
+          </p>
+        </div>
+
+        <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
+          <span className="text-xs text-gray-500">Điểm AI: {post.ai_score ?? "—"}</span>
+          {post.products?.affiliate_link ? (
+            <a
+              href={post.products.affiliate_link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="max-w-[180px] truncate text-xs text-blue-600 hover:underline"
+              title={post.products.affiliate_link}
+            >
+              🔗 Link sản phẩm
+            </a>
+          ) : null}
+          <Link
+            href="/dashboard/posts"
+            className="text-xs font-medium text-blue-600 hover:underline"
+          >
+            Xem / sửa →
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, posts }: { title: string; posts: GeneratedPost[] }) {
+  if (posts.length === 0) return null;
+  return (
+    <section>
+      <h3 className="mb-3 text-sm font-semibold text-gray-700">
+        {title}{" "}
+        <span className="font-normal text-gray-400">({posts.length})</span>
+      </h3>
+      <div className="space-y-3">
+        {posts.map((post) => (
+          <ScheduledItem key={post.id} post={post} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export default async function CalendarPage() {
+  const result = await getScheduledPosts();
+  const posts = result.ok ? result.posts : [];
+
+  const duePosts = posts.filter((p) => isDue(p.scheduled_at));
+  const upcomingPosts = posts.filter((p) => !isDue(p.scheduled_at));
+
+  return (
+    <div>
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold text-gray-900">Lịch đăng bài</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          Các bài AI đã được gán thời gian đăng. Phase sau hệ thống sẽ tự đăng khi
+          đến giờ.
+        </p>
+      </div>
+
+      {!result.ok ? (
+        <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <strong>Không tải được dữ liệu.</strong> {result.error}
+        </div>
+      ) : null}
+
+      {posts.length === 0 ? (
+        <EmptyState
+          icon="🗓️"
+          title="Chưa có bài nào được lên lịch"
+          description="Hãy vào mục Bài đăng AI và đặt lịch cho bài READY."
+          action={
+            <Link
+              href="/dashboard/posts"
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Đi tới Bài đăng AI
+            </Link>
+          }
+        />
+      ) : (
+        <div className="space-y-8">
+          <Section title="Đến hạn hoặc quá hạn" posts={duePosts} />
+          <Section title="Sắp tới" posts={upcomingPosts} />
+        </div>
+      )}
+    </div>
+  );
+}

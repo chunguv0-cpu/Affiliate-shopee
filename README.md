@@ -1,0 +1,206 @@
+# Shopee Affiliate Auto Agent
+
+Hệ thống tự động hóa tiếp thị liên kết (affiliate) cho Shopee: quản lý sản phẩm,
+sinh nội dung (caption) bằng AI, lên lịch và tự động đăng bài lên Facebook Page.
+
+> ⚠️ **Trạng thái hiện tại: Phase 1 — Nền tảng.**
+> Mới dựng khung project, database schema và giao diện dashboard. Chưa có CRUD
+> thật, chưa gọi AI/Facebook/Cron. Các số liệu trên dashboard là dữ liệu mẫu.
+
+---
+
+## 1. Mô tả ứng dụng
+
+Ứng dụng giúp người làm affiliate Shopee:
+
+- Quản lý danh sách sản phẩm affiliate.
+- Sinh caption quảng cáo bằng AI (V98 / OpenAI / Mock).
+- Duyệt nội dung và lên lịch đăng.
+- Tự động đăng bài lên Facebook Page và ghi nhật ký.
+
+## 2. Stack công nghệ
+
+- **Next.js 15** (App Router)
+- **TypeScript**
+- **Tailwind CSS v4**
+- **ESLint**
+- **Supabase** (PostgreSQL) — qua `@supabase/supabase-js`
+
+## 3. Cài đặt local
+
+Yêu cầu: Node.js >= 18.18 (khuyến nghị Node 20+).
+
+```bash
+npm install
+```
+
+## 4. Tạo file `.env.local`
+
+Sao chép từ `.env.example` rồi điền giá trị thật:
+
+```bash
+# macOS / Linux
+cp .env.example .env.local
+
+# Windows PowerShell
+Copy-Item .env.example .env.local
+```
+
+Các biến quan trọng:
+
+| Biến | Mô tả | Phạm vi |
+| --- | --- | --- |
+| `AI_PROVIDER` | `mock` \| `v98` \| `openai` | server |
+| `NEXT_PUBLIC_SUPABASE_URL` | URL dự án Supabase | public |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key | **server-only** |
+| `V98_API_KEY` / `OPENAI_API_KEY` | Khóa AI | **server-only** |
+| `FACEBOOK_PAGE_ACCESS_TOKEN` | Token Facebook | **server-only** |
+| `CRON_SECRET` | Bí mật bảo vệ cron | **server-only** |
+
+> 🔐 Tuyệt đối **không** commit `.env.local` và **không** để lộ các khóa nhạy
+> cảm ra phía client.
+
+## 5. Chạy `schema.sql` trong Supabase
+
+1. Mở dự án Supabase → **SQL Editor**.
+2. Mở file [`supabase/schema.sql`](supabase/schema.sql), copy toàn bộ nội dung.
+3. Dán vào SQL Editor và bấm **Run**.
+
+Schema sẽ tạo extension `pgcrypto`, các bảng, index, trigger `updated_at` và
+các check constraint cho trạng thái.
+
+## 6. Chạy môi trường phát triển
+
+```bash
+npm run dev
+```
+
+Mở http://localhost:3000 → tự động chuyển hướng tới `/dashboard`.
+
+## 7. Build production
+
+```bash
+npm run build
+npm start
+```
+
+## 8. Cron tự động đăng (Phase 7)
+
+Route cron: `GET /api/cron/publish-due-posts` — mỗi lần chạy sẽ tìm **tối đa 1**
+bài đến hạn (`status=READY`, `should_publish=true`, `ai_score>=80`,
+`scheduled_at <= now()`) và tự đăng lên Facebook Page.
+
+### Cấu hình `CRON_SECRET`
+
+- Tạo một chuỗi bí mật ngẫu nhiên, dài (>= 32 ký tự). Ví dụ tạo bằng PowerShell:
+  ```powershell
+  [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Max 256 }))
+  ```
+- Đặt vào `.env.local`: `CRON_SECRET=<chuỗi vừa tạo>`.
+- Khi deploy: đặt `CRON_SECRET` trong **Vercel → Settings → Environment Variables**.
+  Vercel Cron sẽ tự gửi header `Authorization: Bearer <CRON_SECRET>`.
+
+### Test cron ở local
+
+PowerShell:
+```powershell
+$headers = @{ Authorization = "Bearer YOUR_CRON_SECRET" }
+Invoke-RestMethod `
+  -Uri "http://localhost:3000/api/cron/publish-due-posts" `
+  -Method GET `
+  -Headers $headers
+```
+
+curl:
+```bash
+curl -X GET http://localhost:3000/api/cron/publish-due-posts ^
+  -H "Authorization: Bearer YOUR_CRON_SECRET"
+```
+
+- Sai/thiếu secret → HTTP 401 `{ "ok": false, "error": "Unauthorized" }`.
+- Không có bài đến hạn → `{ "ok": true, "processed": 0, "message": "Không có bài đến hạn." }`.
+- Có bài đến hạn → `{ "ok": true, "processed": 1, "result": { ... } }`.
+
+### Lịch chạy trên Vercel
+
+File [`vercel.json`](vercel.json) đã khai báo chạy mỗi 30 phút:
+`"schedule": "*/30 * * * *"`.
+
+## 9. Lưu ý production (Phase 8)
+
+- **KHÔNG commit `.env.local`.** File này đã được `.gitignore`. Chỉ `.env.example`
+  (toàn placeholder) được đưa lên repo.
+- **Khóa nhạy cảm chỉ dùng server-side:** `FACEBOOK_PAGE_ACCESS_TOKEN`,
+  `SUPABASE_SERVICE_ROLE_KEY`, `V98_API_KEY`, `OPENAI_API_KEY`, `CRON_SECRET`.
+  Không bao giờ để các khóa này lộ ra client (không có tiền tố `NEXT_PUBLIC_`).
+- **Nếu token từng bị lộ → phải tạo lại (rotate) ngay** trong Facebook/Supabase,
+  rồi cập nhật `.env.local` và Vercel Environment Variables.
+- **Chống đăng trùng:** trước khi gọi Facebook, hệ thống "claim" bài bằng cách
+  chuyển `READY → PUBLISHING` một cách atomic. Bài đang `PUBLISHING` sẽ không bị
+  đăng lần nữa bởi luồng thủ công hay cron.
+- **Cron chỉ xử lý tối đa 1 bài/lần** để tránh spam. Nếu nhiều bài đến hạn, chúng
+  được đăng dần qua các lần cron (mặc định mỗi 30 phút).
+- **Thử lại bài lỗi:** mở `/dashboard/posts`, bài `FAILED` có nút **🔄 Thử lại**
+  để đưa về `READY` (xóa `error_log`), sau đó đăng lại thủ công hoặc đặt lịch.
+- **Migration:** nếu DB đã tạo trước Phase 8, chạy
+  [`supabase/migrations/add_publishing_status.sql`](supabase/migrations/add_publishing_status.sql)
+  trong Supabase SQL Editor để check constraint chấp nhận `PUBLISHING`.
+- **Test cron local:** xem mục 8.
+
+## 10. Deploy lên Vercel
+
+Trước khi deploy, chạy `npm run check:env` và `npm run build` để chắc chắn không
+thiếu env và build sạch. Xem thêm [`PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md).
+
+1. **Đẩy code lên GitHub** (đảm bảo `.env.local` KHÔNG được commit — đã `.gitignore`).
+   ```bash
+   git add -A && git commit -m "..." && git push
+   ```
+2. **Import repo vào Vercel**: vercel.com → *Add New → Project* → chọn repo.
+3. **Add Environment Variables** trong *Project Settings → Environment Variables*
+   (Production). Set đủ các biến trong bảng ở [`PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md)
+   mục 2. **Không** upload `.env.local`.
+4. **Deploy** production (Vercel tự build `next build`).
+5. **Kiểm tra Cron Jobs**: Project → *Settings → Cron Jobs* — phải thấy
+   `/api/cron/publish-due-posts` chạy mỗi 30 phút (khai báo trong `vercel.json`).
+6. **Function Logs** nếu cron lỗi: Project → *Logs* (hoặc *Deployments → Functions*)
+   để xem phản hồi của route cron.
+7. **KHÔNG dùng `.env.local` trên Vercel** — mọi biến phải đặt qua Environment Variables.
+
+> Gợi ý: lần đầu nên để `AI_PROVIDER=mock` để kiểm tra toàn luồng, sau đó mới đổi
+> sang `v98`/`openai`.
+
+## 11. Roadmap
+
+| Phase | Nội dung |
+| --- | --- |
+| **Phase 1** | Nền tảng app (khung project, schema, dashboard) ✅ |
+| **Phase 2** | CRUD sản phẩm |
+| **Phase 3** | AI Provider: V98 / OpenAI / Mock |
+| **Phase 4** | Sinh caption bằng AI |
+| **Phase 5** | Lịch đăng bài |
+| **Phase 6** | Đăng Facebook thủ công |
+| **Phase 7** | Vercel Cron tự động đăng |
+| **Phase 8** | Logs, retry, chống lỗi |
+
+## Cấu trúc thư mục
+
+```
+app/
+  api/health/route.ts      # health check
+  dashboard/
+    layout.tsx             # khung dashboard
+    page.tsx               # tổng quan + 4 stat card
+    products/page.tsx      # quản lý sản phẩm
+    posts/page.tsx         # bài đăng AI
+    calendar/page.tsx      # lịch đăng
+    settings/page.tsx      # cấu hình (đọc AI provider server-side)
+    logs/page.tsx          # nhật ký
+components/dashboard/       # Shell, Sidebar, Topbar, StatCard, ...
+lib/
+  supabase/server.ts       # createSupabaseAdminClient() (server-only)
+  ai/client.ts             # placeholder AI + mock caption
+  facebook/client.ts       # placeholder Facebook + mock publish
+  utils/env.ts             # getRequiredEnv / getOptionalEnv
+supabase/schema.sql        # database schema
+```
