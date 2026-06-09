@@ -123,8 +123,13 @@ curl -X GET http://localhost:3000/api/cron/publish-due-posts ^
 
 ### Lịch chạy trên Vercel
 
-File [`vercel.json`](vercel.json) đã khai báo chạy mỗi 30 phút:
-`"schedule": "*/30 * * * *"`.
+File [`vercel.json`](vercel.json) khai báo chạy **1 lần/ngày** lúc 01:00 UTC
+(`"schedule": "0 1 * * *"`).
+
+> ⚠️ Gói **Hobby (free)** của Vercel chỉ cho phép cron **tối đa 1 lần/ngày** — lịch
+> dày hơn (vd `*/30 * * * *`) sẽ **fail khi deploy**. Muốn chạy mỗi 30 phút phải
+> nâng gói **Pro** rồi đổi `schedule` thành `*/30 * * * *`. Bạn vẫn có thể gọi cron
+> thủ công bất cứ lúc nào bằng header `Authorization: Bearer <CRON_SECRET>`.
 
 ## 9. Lưu ý production (Phase 8)
 
@@ -139,7 +144,7 @@ File [`vercel.json`](vercel.json) đã khai báo chạy mỗi 30 phút:
   chuyển `READY → PUBLISHING` một cách atomic. Bài đang `PUBLISHING` sẽ không bị
   đăng lần nữa bởi luồng thủ công hay cron.
 - **Cron chỉ xử lý tối đa 1 bài/lần** để tránh spam. Nếu nhiều bài đến hạn, chúng
-  được đăng dần qua các lần cron (mặc định mỗi 30 phút).
+  được đăng dần qua các lần cron (mặc định 1 lần/ngày trên gói Hobby).
 - **Thử lại bài lỗi:** mở `/dashboard/posts`, bài `FAILED` có nút **🔄 Thử lại**
   để đưa về `READY` (xóa `error_log`), sau đó đăng lại thủ công hoặc đặt lịch.
 - **Migration:** nếu DB đã tạo trước Phase 8, chạy
@@ -162,7 +167,7 @@ thiếu env và build sạch. Xem thêm [`PRODUCTION_CHECKLIST.md`](PRODUCTION_C
    mục 2. **Không** upload `.env.local`.
 4. **Deploy** production (Vercel tự build `next build`).
 5. **Kiểm tra Cron Jobs**: Project → *Settings → Cron Jobs* — phải thấy
-   `/api/cron/publish-due-posts` chạy mỗi 30 phút (khai báo trong `vercel.json`).
+   `/api/cron/publish-due-posts` chạy 1 lần/ngày (khai báo trong `vercel.json`).
 6. **Function Logs** nếu cron lỗi: Project → *Logs* (hoặc *Deployments → Functions*)
    để xem phản hồi của route cron.
 7. **KHÔNG dùng `.env.local` trên Vercel** — mọi biến phải đặt qua Environment Variables.

@@ -44,7 +44,9 @@ Checklist chuẩn bị trước và sau khi deploy lên Vercel.
 ## 4. Cron production
 
 - [`vercel.json`](vercel.json) có `"path": "/api/cron/publish-due-posts"`.
-- `schedule` mặc định **mỗi 30 phút** (`*/30 * * * *`).
+- `schedule` mặc định **1 lần/ngày** (`0 1 * * *`) để hợp với giới hạn gói Hobby.
+  ⚠️ Gói Hobby chỉ cho cron tối đa 1 lần/ngày; lịch dày hơn (vd `*/30 * * * *`) sẽ
+  **fail khi deploy**. Cần chạy 30 phút/lần thì nâng gói **Pro** rồi đổi schedule.
 - Cron **chỉ xử lý tối đa 1 bài/lần** để tránh spam Fanpage.
 - Route yêu cầu `Authorization: Bearer <CRON_SECRET>`. Vercel Cron tự gửi header này khi `CRON_SECRET` đã set.
 
