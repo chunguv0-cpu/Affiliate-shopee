@@ -47,6 +47,7 @@ export default function WeeklyPlannerForm({
       goal: (String(fd.get("goal") ?? "balanced") as CampaignGoal),
       target_customer: String(fd.get("target_customer") ?? ""),
       notes: String(fd.get("notes") ?? ""),
+      use_market_research: fd.get("use_market_research") === "true",
     };
 
     startTransition(async () => {
@@ -94,6 +95,17 @@ export default function WeeklyPlannerForm({
         </div>
       </div>
 
+      <div className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+        <label className="flex items-center gap-2 text-sm font-medium text-gray-800">
+          <input type="checkbox" name="use_market_research" value="true" defaultChecked className="h-4 w-4" />
+          Cho AI nghiên cứu thị trường trước khi lập kế hoạch
+        </label>
+        <p className="mt-1 text-xs text-gray-500">
+          AI sẽ tìm kiếm thông tin công khai về sản phẩm, nhu cầu khách hàng và cách
+          viết nội dung đang phù hợp. Không đăng bài tự động.
+        </p>
+      </div>
+
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
@@ -105,7 +117,7 @@ export default function WeeklyPlannerForm({
         disabled={pending}
         className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {pending ? "AI đang phân tích..." : "🧠 Tạo gợi ý chiến dịch"}
+        {pending ? "AI đang nghiên cứu & lập kế hoạch..." : "🧠 Tạo gợi ý chiến dịch"}
       </button>
     </form>
   );

@@ -3,13 +3,20 @@ import { notFound } from "next/navigation";
 
 import PageHeader from "@/components/dashboard/PageHeader";
 import RecommendationStatusButtons from "@/components/dashboard/RecommendationStatusButtons";
-import { getCampaignRecommendationById } from "@/app/dashboard/ai-planner/actions";
+import {
+  getCampaignRecommendationById,
+  getResearchSources,
+} from "@/app/dashboard/ai-planner/actions";
 import type {
+  CampaignConcept,
+  CreativeItem,
+  InteractionItem,
   RecAngle,
   RecHook,
   RecProduct,
   RecScheduleItem,
 } from "@/lib/ai/campaign-planner";
+import type { MarketResearchInsights } from "@/lib/research/research-summarizer";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +53,11 @@ export default async function RecommendationDetailPage({
   const angles = arr<RecAngle>(rec.content_angles);
   const hooks = arr<RecHook>(rec.engagement_hooks);
   const risks = arr<string>(rec.risks);
+  const interaction = arr<InteractionItem>(rec.interaction_plan);
+  const creative = arr<CreativeItem>(rec.creative_directions);
+  const concept = (rec.campaign_concept ?? null) as CampaignConcept | null;
+  const mr = (rec.market_research ?? null) as MarketResearchInsights | null;
+  const sources = rec.research_run_id ? await getResearchSources(rec.research_run_id) : [];
 
   return (
     <div>
@@ -105,7 +117,7 @@ export default async function RecommendationDetailPage({
                   <tr>
                     <th className="px-3 py-2">Ngày</th><th className="px-3 py-2">Giờ</th>
                     <th className="px-3 py-2">Sản phẩm</th><th className="px-3 py-2">Angle</th>
-                    <th className="px-3 py-2">Mục tiêu</th><th className="px-3 py-2">Hook</th><th className="px-3 py-2">CTA</th>
+                    <th className="px-3 py-2">Mục tiêu</th><th className="px-3 py-2">Hook</th><th className="px-3 py-2">CTA</th><th className="px-3 py-2">Comment</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -118,6 +130,7 @@ export default async function RecommendationDetailPage({
                       <td className="px-3 py-2 text-gray-500">{s.objective}</td>
                       <td className="px-3 py-2 text-gray-500">{s.hook_direction}</td>
                       <td className="px-3 py-2 text-gray-500">{s.cta}</td>
+                      <td className="px-3 py-2 text-gray-500">{s.comment_prompt}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -159,6 +172,109 @@ export default async function RecommendationDetailPage({
             </ul>
           )}
         </Section>
+
+        {/* Campaign concept */}
+        {concept ? (
+          <Section title="Concept chiến dịch">
+            <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+              <div><dt className="text-gray-400">Big idea</dt><dd className="font-medium text-gray-800">{concept.big_idea || "—"}</dd></div>
+              <div><dt className="text-gray-400">Cảm xúc mục tiêu</dt><dd className="text-gray-700">{concept.target_emotion || "—"}</dd></div>
+              <div><dt className="text-gray-400">Cơ chế lan tỏa</dt><dd className="text-gray-700">{concept.viral_mechanism || "—"}</dd></div>
+              <div><dt className="text-gray-400">Vì sao tuần này</dt><dd className="text-gray-700">{concept.why_this_week || "—"}</dd></div>
+            </dl>
+          </Section>
+        ) : null}
+
+        {/* Interaction plan */}
+        {interaction.length > 0 ? (
+          <Section title="Kế hoạch kéo tương tác">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead className="bg-gray-50 text-left text-xs font-semibold uppercase text-gray-500">
+                  <tr><th className="px-3 py-2">Loại bài</th><th className="px-3 py-2">Câu hỏi/Comment</th><th className="px-3 py-2">Trigger lưu/share</th><th className="px-3 py-2">Hành vi kỳ vọng</th></tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {interaction.map((it, i) => (
+                    <tr key={i} className="align-top">
+                      <td className="px-3 py-2 text-gray-700">{it.post_type}</td>
+                      <td className="px-3 py-2 text-gray-600">{it.comment_prompt}</td>
+                      <td className="px-3 py-2 text-gray-500">{it.save_share_trigger}</td>
+                      <td className="px-3 py-2 text-gray-500">{it.expected_behavior}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+        ) : null}
+
+        {/* Creative directions */}
+        {creative.length > 0 ? (
+          <Section title="Hướng sáng tạo nội dung">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {creative.map((c, i) => (
+                <div key={i} className="rounded-lg border border-gray-200 p-3">
+                  <p className="font-medium text-gray-900">{c.format}</p>
+                  <p className="mt-1 text-sm text-gray-700">{c.idea}</p>
+                  {c.example_copy_direction ? <p className="mt-1 text-xs text-gray-500">Gợi ý: {c.example_copy_direction}</p> : null}
+                </div>
+              ))}
+            </div>
+          </Section>
+        ) : null}
+
+        {/* Research summary */}
+        {mr ? (
+          <Section title="Nghiên cứu thị trường">
+            <p className="text-sm text-gray-700">{mr.market_summary}</p>
+            {mr.customer_pain_points?.length ? (
+              <div className="mt-3">
+                <p className="text-xs font-semibold uppercase text-gray-400">Pain points của khách</p>
+                <ul className="mt-1 list-disc pl-5 text-sm text-gray-700">
+                  {mr.customer_pain_points.map((x, i) => <li key={i}>{x}</li>)}
+                </ul>
+              </div>
+            ) : null}
+            {mr.trend_opportunities?.length ? (
+              <div className="mt-3">
+                <p className="text-xs font-semibold uppercase text-gray-400">Cơ hội / xu hướng</p>
+                <ul className="mt-1 list-disc pl-5 text-sm text-gray-700">
+                  {mr.trend_opportunities.map((x, i) => <li key={i}>{x}</li>)}
+                </ul>
+              </div>
+            ) : null}
+            {mr.engagement_tactics?.length ? (
+              <div className="mt-3">
+                <p className="text-xs font-semibold uppercase text-gray-400">Tactic tăng tương tác</p>
+                <ul className="mt-1 space-y-1 text-sm text-gray-700">
+                  {mr.engagement_tactics.map((t, i) => (
+                    <li key={i}>• <strong>{t.tactic}</strong>{t.example ? ` — ${t.example}` : ""}{t.risk ? ` (⚠ ${t.risk})` : ""}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </Section>
+        ) : null}
+
+        {/* Sources */}
+        {sources.length > 0 ? (
+          <Section title="Nguồn tham khảo">
+            <ul className="space-y-2 text-sm">
+              {sources.map((s, i) => (
+                <li key={i} className="border-b border-gray-100 pb-2 last:border-0">
+                  {s.url ? (
+                    <a href={s.url} target="_blank" rel="noopener noreferrer" className="font-medium text-blue-600 hover:underline">
+                      {s.title || s.url}
+                    </a>
+                  ) : (
+                    <span className="font-medium text-gray-800">{s.title || "—"}</span>
+                  )}
+                  {s.snippet ? <p className="mt-0.5 text-xs text-gray-500">{s.snippet}</p> : null}
+                </li>
+              ))}
+            </ul>
+          </Section>
+        ) : null}
 
         {/* Rủi ro */}
         <Section title="Rủi ro / cảnh báo">

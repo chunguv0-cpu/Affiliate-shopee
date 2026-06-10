@@ -3,6 +3,7 @@ import "server-only";
 import OpenAI from "openai";
 
 import { getAIProvider, resolveProviderConfig } from "@/lib/ai/client";
+import type { MarketResearchInsights } from "@/lib/research/research-summarizer";
 
 export type CampaignGoal =
   | "clicks"
@@ -40,6 +41,26 @@ export type WeeklyPlanInput = {
   summary: PlannerSummary;
   topAngles: { angle: string; clicks: number; orders: number; commission: number }[];
   topTimes: { time: string; posts: number }[];
+  /** Phase 13.1: insight nghiên cứu thị trường (nếu có). */
+  research?: MarketResearchInsights | null;
+};
+
+export type CampaignConcept = {
+  big_idea: string;
+  target_emotion: string;
+  viral_mechanism: string;
+  why_this_week: string;
+};
+export type InteractionItem = {
+  post_type: string;
+  comment_prompt: string;
+  save_share_trigger: string;
+  expected_behavior: string;
+};
+export type CreativeItem = {
+  format: string;
+  idea: string;
+  example_copy_direction: string;
 };
 
 export type RecProduct = {
@@ -58,6 +79,7 @@ export type RecScheduleItem = {
   objective: string;
   hook_direction: string;
   cta: string;
+  comment_prompt: string;
 };
 export type RecAngle = {
   angle: string;
@@ -78,6 +100,9 @@ export type WeeklyPlanResult = {
   engagement_hooks: RecHook[];
   risks: string[];
   ai_reasoning_summary: string;
+  campaign_concept: CampaignConcept | null;
+  interaction_plan: InteractionItem[];
+  creative_directions: CreativeItem[];
   raw_ai_response: unknown;
 };
 
@@ -103,13 +128,18 @@ Quy tắc:
 - Nếu mục tiêu là engagement: ưu tiên hook/câu hỏi hơn bán trực diện.
 - Nếu mục tiêu là commission: ưu tiên sản phẩm hoa hồng cao nhưng vẫn có khả năng click.
 
+Nếu có dữ liệu NGHIÊN CỨU THỊ TRƯỜNG, hãy tận dụng để kế hoạch CỤ THỂ hơn (hook, nhóm sản phẩm, cách kéo tương tác). Phân biệt rõ dữ liệu nội bộ vs research ngoài vs suy luận.
+
 CHỈ trả về JSON đúng schema (không thêm text ngoài JSON):
 {
   "title": "", "goal": "", "summary": "", "strategy": "",
   "recommended_products": [{"product_id":"","product_name":"","priority":"HIGH|MEDIUM|LOW","reason":"","suggested_role":"","risk":""}],
-  "recommended_schedule": [{"day":"","time":"","product_name":"","angle":"","objective":"","hook_direction":"","cta":""}],
+  "recommended_schedule": [{"day":"","time":"","product_name":"","angle":"","objective":"","hook_direction":"","cta":"","comment_prompt":""}],
   "content_angles": [{"angle":"","purpose":"","best_for":"","example_hook":""}],
   "engagement_hooks": [{"type":"","hook":"","why_it_works":""}],
+  "campaign_concept": {"big_idea":"","target_emotion":"","viral_mechanism":"","why_this_week":""},
+  "interaction_plan": [{"post_type":"câu hỏi mở | list deal | review mềm | so sánh | checklist","comment_prompt":"","save_share_trigger":"","expected_behavior":"comment | click | lưu bài | inbox"}],
+  "creative_directions": [{"format":"bài text | ảnh list | ảnh before-after | checklist | album","idea":"","example_copy_direction":""}],
   "risks": [""],
   "ai_reasoning_summary": ""
 }`;
@@ -144,6 +174,17 @@ function buildUserPrompt(input: WeeklyPlanInput): string {
     "",
     "Danh sách sản phẩm READY:",
     productLines || "(trống)",
+    "",
+    input.research
+      ? [
+          "NGHIÊN CỨU THỊ TRƯỜNG (nguồn ngoài):",
+          `- Tóm tắt: ${input.research.market_summary}`,
+          `- Pain points: ${input.research.customer_pain_points.join("; ")}`,
+          `- Cơ hội/xu hướng: ${input.research.trend_opportunities.join("; ")}`,
+          `- Hook gợi ý: ${input.research.content_hooks.map((h) => h.hook).join("; ")}`,
+          `- Tactic tương tác: ${input.research.engagement_tactics.map((t) => t.tactic).join("; ")}`,
+        ].join("\n")
+      : "NGHIÊN CỨU THỊ TRƯỜNG: (không dùng)",
     "",
     "Hãy lập kế hoạch và CHỈ trả về JSON đúng schema.",
   ].join("\n");
@@ -199,10 +240,25 @@ function mockPlan(input: WeeklyPlanInput): WeeklyPlanResult {
         objective: GOAL_LABELS[input.goal],
         hook_direction: "Mở đầu tự nhiên, nêu nhu cầu thực tế.",
         cta: "Lưu bài lại / xem link bên dưới nhé.",
+        comment_prompt: "Nhà bạn đang dùng món này loại nào?",
       })),
     ),
     content_angles: DEFAULT_ANGLES,
     engagement_hooks: DEFAULT_HOOKS,
+    campaign_concept: {
+      big_idea: "Tuần gom deal đồ dùng hằng ngày — chọn đúng, mua đủ.",
+      target_emotion: "An tâm, tiết kiệm thời gian.",
+      viral_mechanism: "Bài hỏi đáp + checklist dễ lưu, dễ tag bạn bè.",
+      why_this_week: lowData ? "Khởi động test để thu dữ liệu." : "Tận dụng nhóm sản phẩm đang có tương tác.",
+    },
+    interaction_plan: [
+      { post_type: "câu hỏi mở", comment_prompt: "Bạn hay mua món này ở đâu?", save_share_trigger: "Checklist tiện lưu lại", expected_behavior: "comment" },
+      { post_type: "list deal", comment_prompt: "Cần link món nào để mình gửi?", save_share_trigger: "Gom nhiều deal trong 1 bài", expected_behavior: "click" },
+    ],
+    creative_directions: [
+      { format: "ảnh list", idea: "Tổng hợp 3-5 món hằng ngày kèm ghi chú ngắn", example_copy_direction: "Liệt kê ngắn gọn, mỗi món 1 dòng lợi ích thực tế." },
+      { format: "checklist", idea: "Checklist 'cần mua dự trữ tuần này'", example_copy_direction: "Giọng thân thiện, gợi nhu cầu thật, CTA lưu bài." },
+    ],
     risks: DEFAULT_RISKS,
     ai_reasoning_summary: lowData
       ? "Mock: dữ liệu ít nên ưu tiên test sản phẩm hiện có với nhiều góc viết."
@@ -258,6 +314,7 @@ function parsePlan(raw: string, input: WeeklyPlanInput): WeeklyPlanResult {
         objective: str(r.objective),
         hook_direction: str(r.hook_direction),
         cta: str(r.cta),
+        comment_prompt: str(r.comment_prompt),
       };
     }),
     content_angles: asArray(obj.content_angles).map((a) => {
@@ -279,6 +336,33 @@ function parsePlan(raw: string, input: WeeklyPlanInput): WeeklyPlanResult {
     }),
     risks: asArray(obj.risks).map((x) => str(x)).filter(Boolean),
     ai_reasoning_summary: str(obj.ai_reasoning_summary, fb.ai_reasoning_summary),
+    campaign_concept: (() => {
+      const c = (obj.campaign_concept ?? null) as Record<string, unknown> | null;
+      if (!c || typeof c !== "object") return fb.campaign_concept;
+      return {
+        big_idea: str(c.big_idea),
+        target_emotion: str(c.target_emotion),
+        viral_mechanism: str(c.viral_mechanism),
+        why_this_week: str(c.why_this_week),
+      };
+    })(),
+    interaction_plan: asArray(obj.interaction_plan).map((it) => {
+      const r = (it ?? {}) as Record<string, unknown>;
+      return {
+        post_type: str(r.post_type),
+        comment_prompt: str(r.comment_prompt),
+        save_share_trigger: str(r.save_share_trigger),
+        expected_behavior: str(r.expected_behavior),
+      };
+    }),
+    creative_directions: asArray(obj.creative_directions).map((it) => {
+      const r = (it ?? {}) as Record<string, unknown>;
+      return {
+        format: str(r.format),
+        idea: str(r.idea),
+        example_copy_direction: str(r.example_copy_direction),
+      };
+    }),
     raw_ai_response: obj,
   };
 }

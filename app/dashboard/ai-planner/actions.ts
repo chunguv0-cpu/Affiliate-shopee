@@ -9,6 +9,12 @@ import {
 } from "@/lib/ai/campaign-planner";
 import { toNumberSafe } from "@/lib/analytics";
 import { insertPostingLog } from "@/lib/posts/log";
+import { generateResearchQueries } from "@/lib/research/query-generator";
+import {
+  summarizeMarketResearch,
+  type MarketResearchInsights,
+} from "@/lib/research/research-summarizer";
+import { getSearchProvider, searchWeb, type SearchResult } from "@/lib/research/search-client";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { AICampaignRecommendation, RecommendationStatus } from "@/lib/types";
 
@@ -35,12 +41,164 @@ export type GenerateRecInput = {
   goal: CampaignGoal;
   target_customer?: string;
   notes?: string;
+  use_market_research?: boolean;
+  research_run_id?: string;
 };
 
 const GEN_ACTION = "GENERATE_AI_WEEKLY_CAMPAIGN_PLAN";
 const APPROVE_ACTION = "APPROVE_AI_CAMPAIGN_PLAN";
 const REJECT_ACTION = "REJECT_AI_CAMPAIGN_PLAN";
+const RESEARCH_ACTION = "RUN_MARKET_RESEARCH";
 const VALID_GOALS: CampaignGoal[] = ["clicks", "orders", "commission", "engagement", "balanced"];
+const MAX_QUERIES = 15;
+
+export type RunResearchResult =
+  | { ok: true; research_run_id: string }
+  | { ok: false; error: string };
+
+export type ResearchInput = {
+  week_start: string;
+  week_end: string;
+  goal: CampaignGoal;
+  target_customer?: string;
+  notes?: string;
+};
+
+/**
+ * Chạy nghiên cứu thị trường (Phase 13.1): sinh query -> search -> lưu nguồn -> AI tóm tắt.
+ * Nguồn công khai, không scrape/login. Lỗi 1 query không làm chết cả run.
+ */
+export async function runMarketResearchForWeeklyPlan(
+  input: ResearchInput,
+): Promise<RunResearchResult> {
+  const goal = VALID_GOALS.includes(input?.goal) ? input.goal : "balanced";
+
+  let supabase;
+  try {
+    supabase = createSupabaseAdminClient();
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Không kết nối được cơ sở dữ liệu: ${m}` };
+  }
+
+  // Sản phẩm ACTIVE + READY (kèm target_customer/angle để sinh query).
+  const { data: productsData, error: prodErr } = await supabase
+    .from("products")
+    .select("product_name, target_customer, product_angle, status, link_status")
+    .eq("status", "ACTIVE")
+    .eq("link_status", "READY");
+  if (prodErr) {
+    return { ok: false, error: `Không tải được sản phẩm: ${prodErr.message}` };
+  }
+  const products = (productsData ?? []) as {
+    product_name: string;
+    target_customer: string | null;
+    product_angle: string | null;
+  }[];
+  if (products.length === 0) {
+    return { ok: false, error: "Chưa có sản phẩm READY. Hãy import link affiliate trước." };
+  }
+
+  const provider = getSearchProvider();
+
+  // Tạo run RUNNING.
+  const { data: run, error: runErr } = await supabase
+    .from("market_research_runs")
+    .insert({
+      goal,
+      target_customer: input.target_customer?.trim() || null,
+      week_start: input.week_start || null,
+      week_end: input.week_end || null,
+      status: "RUNNING",
+      provider,
+    })
+    .select("id")
+    .single();
+  if (runErr || !run) {
+    return { ok: false, error: `Tạo research run thất bại: ${runErr?.message ?? "không rõ"}` };
+  }
+  const runId = run.id as string;
+
+  try {
+    const queries = generateResearchQueries({
+      products,
+      goal,
+      target_customer: input.target_customer?.trim() || null,
+      notes: input.notes?.trim() || null,
+    }).slice(0, MAX_QUERIES);
+
+    await supabase.from("market_research_runs").update({ queries }).eq("id", runId);
+
+    // Search song song, mỗi query tối đa 5 kết quả.
+    const perQuery = await Promise.all(
+      queries.map(async (q) => {
+        try {
+          const res = await searchWeb(q, { maxResults: 5 });
+          return res.map((r) => ({ query: q, ...r }));
+        } catch {
+          return [] as (SearchResult & { query: string })[];
+        }
+      }),
+    );
+    const flat = perQuery.flat();
+
+    if (flat.length > 0) {
+      await supabase.from("market_research_sources").insert(
+        flat.map((r) => ({
+          research_run_id: runId,
+          query: r.query,
+          title: r.title,
+          url: r.url,
+          snippet: r.snippet ?? null,
+          content: r.content ?? null,
+          source_type: r.source_type ?? provider,
+          relevance_score: r.relevance_score ?? null,
+        })),
+      );
+    }
+
+    const insights = await summarizeMarketResearch({
+      queries,
+      results: flat,
+      productNames: products.map((p) => p.product_name),
+      goal,
+      target_customer: input.target_customer?.trim() || null,
+    });
+
+    await supabase
+      .from("market_research_runs")
+      .update({
+        status: "SUCCESS",
+        summary: insights.market_summary,
+        insights,
+        raw_response: { provider, query_count: queries.length, source_count: flat.length },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", runId);
+
+    await insertPostingLog(
+      supabase,
+      null,
+      RESEARCH_ACTION,
+      "SUCCESS",
+      `Đã chạy research: ${queries.length} query, ${flat.length} nguồn (provider: ${provider}).`,
+      { research_run_id: runId },
+    );
+
+    revalidatePath("/dashboard/ai-planner");
+    return { ok: true, research_run_id: runId };
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    await supabase
+      .from("market_research_runs")
+      .update({ status: "FAILED", error_message: m, updated_at: new Date().toISOString() })
+      .eq("id", runId);
+    await insertPostingLog(supabase, null, RESEARCH_ACTION, "FAILED", `Research thất bại: ${m}`, {
+      research_run_id: runId,
+    });
+    return { ok: false, error: `Research thất bại: ${m}` };
+  }
+}
 
 export async function generateWeeklyCampaignRecommendation(
   input: GenerateRecInput,
@@ -186,6 +344,34 @@ export async function generateWeeklyCampaignRecommendation(
       .sort((a, b) => b.posts - a.posts)
       .slice(0, 6);
 
+    // Nghiên cứu thị trường (tùy chọn).
+    let research: MarketResearchInsights | null = null;
+    let researchRunId: string | null = null;
+    if (input.use_market_research) {
+      let rid = input.research_run_id || null;
+      if (!rid) {
+        const rr = await runMarketResearchForWeeklyPlan({
+          week_start: weekStart,
+          week_end: weekEnd,
+          goal,
+          target_customer: input.target_customer,
+          notes: input.notes,
+        });
+        if (rr.ok) rid = rr.research_run_id;
+      }
+      if (rid) {
+        const { data: runRow } = await supabase
+          .from("market_research_runs")
+          .select("insights")
+          .eq("id", rid)
+          .single();
+        if (runRow?.insights) {
+          research = runRow.insights as MarketResearchInsights;
+          researchRunId = rid;
+        }
+      }
+    }
+
     // Gọi AI.
     let plan;
     try {
@@ -199,6 +385,7 @@ export async function generateWeeklyCampaignRecommendation(
         summary,
         topAngles,
         topTimes,
+        research,
       });
     } catch (err) {
       const m = err instanceof Error ? err.message : "Lỗi không xác định.";
@@ -223,6 +410,11 @@ export async function generateWeeklyCampaignRecommendation(
         risks: plan.risks,
         ai_reasoning_summary: plan.ai_reasoning_summary,
         raw_ai_response: plan.raw_ai_response,
+        research_run_id: researchRunId,
+        campaign_concept: plan.campaign_concept,
+        interaction_plan: plan.interaction_plan,
+        creative_directions: plan.creative_directions,
+        market_research: research,
       })
       .select("id")
       .single();
@@ -313,6 +505,29 @@ export async function getCampaignRecommendationById(
     return data as AICampaignRecommendation;
   } catch {
     return null;
+  }
+}
+
+export type ResearchSource = {
+  query: string | null;
+  title: string | null;
+  url: string | null;
+  snippet: string | null;
+};
+
+/** Lấy danh sách nguồn tham khảo của một research run (rút gọn). */
+export async function getResearchSources(runId: string): Promise<ResearchSource[]> {
+  try {
+    if (!runId) return [];
+    const supabase = createSupabaseAdminClient();
+    const { data } = await supabase
+      .from("market_research_sources")
+      .select("query, title, url, snippet")
+      .eq("research_run_id", runId)
+      .limit(15);
+    return (data ?? []) as ResearchSource[];
+  } catch {
+    return [];
   }
 }
 

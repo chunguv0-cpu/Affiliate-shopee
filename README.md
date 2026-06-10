@@ -194,6 +194,22 @@ File [`vercel.json`](vercel.json) khai báo chạy **1 lần/ngày** lúc 01:00 
 - **Chỉ gợi ý — chưa tự tạo campaign.** Bạn chỉ **Duyệt / Từ chối**; việc tạo campaign thật vẫn làm thủ công.
 - Muốn gợi ý chính xác hơn: **import báo cáo affiliate có sub_id** (mục 9c). Dữ liệu ít → AI tạo "kế hoạch test".
 
+## 9e. AI Market Research Agent (Phase 13.1)
+
+AI có thể **nghiên cứu thị trường bên ngoài** (Search API công khai) trước khi lập kế hoạch tuần.
+
+- **ENV** (server-side): `SEARCH_PROVIDER=mock|tavily|google_cse` (mặc định `mock`).
+  - `tavily`: thêm `TAVILY_API_KEY`.
+  - `google_cse`: thêm `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_CX`.
+  - Thiếu key → tự fallback `mock`, app không crash.
+- **Chỉ dùng nguồn công khai** qua Search API — KHÔNG scrape, KHÔNG cookie, KHÔNG login Shopee, KHÔNG headless browser.
+- **Test search:** `/dashboard/settings` → "Kiểm tra Search" (hoặc `POST /api/research/test`). Không hiển thị API key.
+- **Chạy research:** trong *Gợi ý AI*, tick **"Cho AI nghiên cứu thị trường trước khi lập kế hoạch"** rồi tạo gợi ý.
+  Hệ thống: sinh query → search (≤15 query × 5 kết quả) → lưu nguồn → AI tóm tắt insight → đưa vào kế hoạch.
+- **AI plan dựa trên:** dữ liệu nội bộ + affiliate reports + research ngoài; bổ sung *campaign concept*,
+  *interaction plan*, *creative directions*. Vẫn **cần người dùng Duyệt** trước khi tạo campaign/đăng bài.
+- Lưu ý: trên gói Vercel Hobby, function có giới hạn thời gian — nếu dùng provider thật + nhiều query có thể chậm; `mock` thì tức thời.
+
 ## 10. Deploy lên Vercel
 
 Trước khi deploy, chạy `npm run check:env` và `npm run build` để chắc chắn không

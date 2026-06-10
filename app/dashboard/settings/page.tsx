@@ -1,6 +1,8 @@
 import AITestPanel from "@/components/dashboard/AITestPanel";
 import PageHeader from "@/components/dashboard/PageHeader";
+import SearchTestPanel from "@/components/dashboard/SearchTestPanel";
 import { getAIProvider } from "@/lib/ai/client";
+import { getSearchProvider } from "@/lib/research/search-client";
 
 // Đảm bảo trang luôn đọc env server-side tại thời điểm chạy.
 export const dynamic = "force-dynamic";
@@ -49,6 +51,9 @@ export default function SettingsPage() {
 
         {/* Khu vực kiểm tra AI Agent (Phase 3) */}
         <AITestPanel provider={aiProvider} />
+
+        {/* Khu vực kiểm tra Search (Phase 13.1) */}
+        <SearchTestPanel provider={getSearchProvider()} />
 
         <div className="rounded-xl border border-gray-200 bg-white p-5">
           <h3 className="text-sm font-semibold text-gray-900">

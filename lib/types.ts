@@ -169,6 +169,11 @@ export type AICampaignRecommendation = {
   risks: unknown;
   ai_reasoning_summary: string | null;
   raw_ai_response: unknown;
+  research_run_id: string | null;
+  campaign_concept: unknown;
+  interaction_plan: unknown;
+  creative_directions: unknown;
+  market_research: unknown;
   created_at: string;
   updated_at: string;
 };
