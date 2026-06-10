@@ -22,6 +22,7 @@ export type StrategyMode =
   | "boost_commission"
   | "boost_engagement";
 export type DetailLevel = "quick" | "detailed" | "very_detailed";
+export type ResearchStatus = "USED_TAVILY" | "FALLBACK_ONLY" | "PARTIAL_RESEARCH";
 
 export type SourceInsight = { insight: string; evidence: string; confidence: string };
 export type MarketDiagnosis = {
@@ -126,12 +127,14 @@ export type ProductDiscoveryStrategy = {
   recommended_categories: DiscoveryCategory[];
   new_product_opportunities: NewProductOpportunity[];
   sourcing_plan: SourcingStep[];
+  research_status?: ResearchStatus;
 };
 
 export type StrategicPlan = {
   title: string;
   goal: string;
   planner_mode: PlannerMode;
+  research_status: ResearchStatus;
   product_discovery_strategy: ProductDiscoveryStrategy;
   executive_summary: string;
   market_diagnosis: MarketDiagnosis;
@@ -288,6 +291,29 @@ const DISCOVERY_SEED: Array<{
   { product: "Gối chống trào ngược cho bé", category: "Mẹ và bé", customer: "Mẹ có con sơ sinh", pain: "Bé trớ sữa, ngủ không ngon", band: "trung bình", keywords: ["gối chống trào ngược", "gối cho bé sơ sinh"], angle: "Chăm bé ngủ ngon" },
   { product: "Móc treo đồ đa năng sau cửa", category: "Lưu trữ", customer: "Người ở trọ", pain: "Thiếu chỗ treo đồ", band: "thấp", keywords: ["móc treo sau cửa", "móc treo đa năng"], angle: "Tận dụng không gian nhỏ" },
   { product: "Thảm lau chân thấm hút nhanh", category: "Đồ gia dụng", customer: "Gia đình", pain: "Sàn ướt trơn trượt", band: "thấp", keywords: ["thảm lau chân thấm hút", "thảm chùi chân nhà tắm"], angle: "An toàn cho cả nhà" },
+  { product: "Giá đỡ điện thoại trên xe máy", category: "Đồ xe máy/ô tô nhỏ", customer: "Người chạy xe, shipper", pain: "Khó xem chỉ đường khi lái", band: "thấp", keywords: ["giá đỡ điện thoại xe máy", "kẹp điện thoại xe máy chống rung"], angle: "Tiện ích cho người hay di chuyển" },
+  { product: "Lược chải lông thú cưng", category: "Đồ thú cưng", customer: "Người nuôi chó mèo", pain: "Lông rụng khắp nhà", band: "thấp", keywords: ["lược chải lông chó mèo", "bàn chải thú cưng rụng lông"], angle: "Chăm thú cưng gọn gàng" },
+  { product: "Túi đựng đồ du lịch chống nước", category: "Đồ du lịch/đi chơi", customer: "Người hay đi chơi", pain: "Đồ dễ ướt, sắp xếp lộn xộn", band: "trung bình", keywords: ["túi du lịch chống nước", "túi đựng đồ đi chơi"], angle: "Gọn nhẹ cho chuyến đi" },
+  { product: "Đèn LED dán trang trí phòng", category: "Đồ decor phòng", customer: "Bạn trẻ, sinh viên", pain: "Phòng đơn điệu, thiếu điểm nhấn", band: "thấp", keywords: ["đèn led dán tường", "đèn trang trí phòng ngủ"], angle: "Nâng cấp góc phòng sống ảo" },
+];
+
+// Phase 13.3.2 — nhóm hạt giống fallback khi Tavily lỗi/chậm.
+export const DISCOVERY_SEED_CATEGORIES: string[] = [
+  "mẹ và bé",
+  "đồ gia dụng thiết yếu",
+  "đồ tiêu dùng mua lặp lại",
+  "phụ kiện điện thoại",
+  "đồ bếp tiện ích",
+  "chăm sóc cá nhân phổ thông",
+  "đồ học tập/văn phòng",
+  "sản phẩm dưới 99k dễ mua",
+  "sản phẩm lạ dễ kéo comment",
+  "sản phẩm theo mùa",
+  "đồ xe máy/ô tô nhỏ",
+  "đồ thú cưng",
+  "đồ du lịch/đi chơi",
+  "đồ decor phòng",
+  "đồ chăm sóc nhà cửa",
 ];
 
 function buildDiscoveryStrategy(input: StrategicPlanInput): ProductDiscoveryStrategy {
@@ -386,6 +412,7 @@ function mockPlan(input: StrategicPlanInput): StrategicPlan {
         : `Kế hoạch tuần — ${goalLabel}${orders ? " (ưu tiên chuyển đổi)" : ""}`,
     goal: goalLabel,
     planner_mode: mode,
+    research_status: input.research ? "USED_TAVILY" : "FALLBACK_ONLY",
     product_discovery_strategy: discovery,
     executive_summary: limited
       ? "Dữ liệu nội bộ còn ít, chiến lược tuần này ưu tiên test có kiểm soát: chọn 2-3 sản phẩm nhu cầu rõ để xác nhận tín hiệu mua, kết hợp research thị trường để chọn góc viết và khung giờ. Mục tiêu là thu dữ liệu chuyển đổi đáng tin trước khi mở rộng."
@@ -527,6 +554,7 @@ function parsePlan(raw: string, input: StrategicPlanInput): StrategicPlan {
     title: s(o.title, fb.title),
     goal: s(o.goal, fb.goal),
     planner_mode: mode,
+    research_status: fb.research_status,
     product_discovery_strategy: {
       discovery_summary: s(pds.discovery_summary, fb.product_discovery_strategy.discovery_summary),
       recommended_categories: arr(pds.recommended_categories).map((x) => ({
@@ -636,19 +664,6 @@ function parsePlan(raw: string, input: StrategicPlanInput): StrategicPlan {
 // kế hoạch 7 ngày đầy đủ. Có fallback seed categories nếu research/AI yếu.
 // ===========================================================================
 
-export const SEED_CATEGORIES: string[] = [
-  "mẹ và bé",
-  "đồ gia dụng thiết yếu",
-  "đồ tiêu dùng mua lặp lại",
-  "phụ kiện điện thoại",
-  "đồ bếp tiện ích",
-  "chăm sóc cá nhân phổ thông",
-  "đồ học tập/văn phòng",
-  "sản phẩm dưới 99k dễ mua",
-  "sản phẩm lạ dễ kéo comment",
-  "sản phẩm theo mùa",
-];
-
 function discoverySourcingWeekly(): ExecDay[] {
   return [
     { day: "Ngày 1", theme: "Tìm link sản phẩm ưu tiên cao", posts: [] },
@@ -697,44 +712,48 @@ CHỈ trả về JSON đúng schema (không thêm text ngoài JSON):
 "risks_and_controls":[""]
 }`;
 
-function buildDiscoveryUserPrompt(input: StrategicPlanInput): string {
-  const r = input.research;
+export type DiscoverySnippet = { title: string; snippet: string };
+export type DiscoveryOpts = { researchStatus?: ResearchStatus; sources?: DiscoverySnippet[] };
+
+function buildDiscoveryUserPrompt(input: StrategicPlanInput, sources?: DiscoverySnippet[]): string {
+  const snips = (sources ?? []).filter((x) => (x.title || x.snippet)).slice(0, 6);
   return [
     `MỤC TIÊU: ${GOAL_LABELS[input.goal]} (${input.goal})`,
     `Tệp khách ưu tiên: ${input.target_customer ?? "(không chỉ định)"}`,
     `Ưu tiên của người dùng: ${input.priority_notes ?? "(không có)"}`,
     "",
-    r
+    snips.length > 0
       ? [
-          "NGHIÊN CỨU THỊ TRƯỜNG (tóm tắt):",
-          `- ${r.market_summary}`,
-          `- Pain points: ${r.customer_pain_points.join("; ")}`,
-          `- Xu hướng: ${r.trend_opportunities.join("; ")}`,
-          `- Nhóm SP gợi ý: ${r.recommended_product_groups.map((g) => g.group).join("; ")}`,
+          "NGUỒN THAM KHẢO (snippet công khai, dùng để gợi nhu cầu — không trích nguyên văn):",
+          ...snips.map((x, i) => `${i + 1}. ${x.title} — ${(x.snippet || "").slice(0, 200)}`),
         ].join("\n")
       : "NGHIÊN CỨU THỊ TRƯỜNG: (ít/không có — hãy dùng nhóm hạt giống bên dưới, confidence LOW/MEDIUM)",
     "",
-    `NHÓM HẠT GIỐNG (fallback nếu research yếu): ${SEED_CATEGORIES.join(", ")}`,
+    `NHÓM HẠT GIỐNG (fallback nếu research yếu): ${DISCOVERY_SEED_CATEGORIES.join(", ")}`,
     "",
     "Hãy đề xuất >=10 sản phẩm mới đa dạng nhóm. CHỈ trả về JSON đúng schema.",
   ].join("\n");
 }
 
 /**
- * Tạo chiến lược khám phá sản phẩm (nhẹ, 1 AI call). Trả về StrategicPlan rút gọn.
- * fallback=true khi dùng seed (provider mock / AI lỗi / thiếu dữ liệu / phải bù seed).
+ * Tạo chiến lược khám phá sản phẩm (nhẹ, CHỈ 1 AI call, không gọi summarizer).
+ * fallback=true khi dùng seed (provider mock / AI lỗi / timeout / thiếu dữ liệu / phải bù seed).
+ * AI tự giới hạn 30s; quá hạn => dùng seed (KHÔNG throw).
  */
 export async function generateProductDiscovery(
   input: StrategicPlanInput,
+  opts?: DiscoveryOpts,
 ): Promise<{ plan: StrategicPlan; fallback: boolean }> {
   const seed = buildDiscoveryStrategy({ ...input, planner_mode: "DISCOVERY_ONLY" });
   const shortWeekly = discoverySourcingWeekly();
+  const researchStatus: ResearchStatus = opts?.researchStatus ?? "FALLBACK_ONLY";
 
   const assemble = (pds: ProductDiscoveryStrategy, summary: string): StrategicPlan => ({
     title: "Chiến lược tìm sản phẩm mới",
     goal: GOAL_LABELS[input.goal],
     planner_mode: "DISCOVERY_ONLY",
-    product_discovery_strategy: pds,
+    research_status: researchStatus,
+    product_discovery_strategy: { ...pds, research_status: researchStatus },
     executive_summary: summary || seed.discovery_summary,
     market_diagnosis: { summary: "", customer_pain_points: [], purchase_triggers: [], content_patterns: [], source_based_insights: [] },
     internal_data_diagnosis: { data_quality: "TEST_ONLY", summary: "", what_we_know: [], what_we_do_not_know: [], testing_assumption: [] },
@@ -763,15 +782,21 @@ export async function generateProductDiscovery(
   try {
     const { apiKey, baseURL, model } = resolveProviderConfig(provider);
     const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
-    const completion = await client.chat.completions.create({
+    // 1 AI call, tự giới hạn 30s -> nếu chậm thì dùng seed thay vì để job FAILED.
+    const aiPromise = client.chat.completions.create({
       model,
       temperature: 0.6,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: DISCOVERY_SYSTEM_PROMPT },
-        { role: "user", content: buildDiscoveryUserPrompt(input) },
+        { role: "user", content: buildDiscoveryUserPrompt(input, opts?.sources) },
       ],
     });
+    const completion = await Promise.race([
+      aiPromise,
+      new Promise<null>((res) => setTimeout(() => res(null), 30_000)),
+    ]);
+    if (!completion) return { plan: assemble(seed, ""), fallback: true };
     const raw = completion.choices[0]?.message?.content ?? "";
     const start = raw.indexOf("{");
     const end = raw.lastIndexOf("}");

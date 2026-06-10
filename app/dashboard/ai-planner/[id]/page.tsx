@@ -36,6 +36,12 @@ const PRIORITY_STYLE: Record<string, string> = {
   MEDIUM: "bg-amber-50 text-amber-700",
   LOW: "bg-gray-100 text-gray-600",
 };
+const RESEARCH_STATUS_LABELS: Record<string, string> = {
+  USED_TAVILY: "Có nghiên cứu thị trường",
+  PARTIAL_RESEARCH: "Nghiên cứu một phần",
+  FALLBACK_ONLY: "Dùng nhóm hạt giống (không/ít research)",
+};
+
 const DECISION_STYLE: Record<string, string> = {
   PUSH: "bg-green-50 text-green-700",
   TEST: "bg-amber-50 text-amber-700",
@@ -172,8 +178,13 @@ export default async function RecommendationDetailPage({
             {hasDiscovery ? (
               <>
                 <Section title="Chiến lược tìm sản phẩm mới">
-                  <div className="mb-3 inline-flex rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-700">
-                    Chế độ: {PLANNER_MODE_LABELS[plannerMode]}
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    <span className="inline-flex rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-700">
+                      Chế độ: {PLANNER_MODE_LABELS[plannerMode]}
+                    </span>
+                    <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
+                      Nguồn dữ liệu: {RESEARCH_STATUS_LABELS[plan.research_status] ?? plan.research_status}
+                    </span>
                   </div>
                   {pd.discovery_summary ? <p className="text-sm text-gray-700">{pd.discovery_summary}</p> : null}
                   {pd.recommended_categories.length > 0 ? (
@@ -197,7 +208,7 @@ export default async function RecommendationDetailPage({
                 {pd.new_product_opportunities.length > 0 ? (
                   <Section title={`Sản phẩm mới nên tìm link affiliate (${pd.new_product_opportunities.length})`}>
                     <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      Các sản phẩm này <strong>chưa có link affiliate</strong>. Cần tìm và import link trước khi tạo campaign thật.
+                      Các sản phẩm này <strong>chưa có link affiliate</strong>. Hãy tìm link, gắn sub_id, import vào app rồi mới tạo campaign thật.
                     </div>
                     <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                       {pd.new_product_opportunities.map((op, i) => (
@@ -241,7 +252,7 @@ export default async function RecommendationDetailPage({
                       ))}
                     </ol>
                     <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      Các sản phẩm này chưa có link affiliate. Cần tìm và import link trước khi tạo campaign thật.
+                      Các sản phẩm này chưa có link affiliate. Hãy tìm link, gắn sub_id, import vào app rồi mới tạo campaign thật.
                     </div>
                   </Section>
                 ) : null}

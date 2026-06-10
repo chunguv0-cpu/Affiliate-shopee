@@ -36,11 +36,19 @@ export function normalizeCampaignPlan(input: unknown): StrategicPlan {
       ? (p.planner_mode as PlannerMode)
       : "HYBRID";
 
+  const rsRaw = pds.research_status ?? p.research_status;
+  const researchStatus =
+    rsRaw === "USED_TAVILY" || rsRaw === "PARTIAL_RESEARCH" || rsRaw === "FALLBACK_ONLY"
+      ? rsRaw
+      : "FALLBACK_ONLY";
+
   return {
     title: s(p.title, "Kế hoạch chiến dịch"),
     goal: s(p.goal, ""),
     planner_mode: mode,
+    research_status: researchStatus,
     product_discovery_strategy: {
+      research_status: researchStatus,
       discovery_summary: s(pds.discovery_summary),
       recommended_categories: aArr(pds.recommended_categories).map((x) => ({
         category: s(x.category),

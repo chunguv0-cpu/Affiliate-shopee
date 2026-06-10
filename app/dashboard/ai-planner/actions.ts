@@ -9,6 +9,7 @@ import {
   generateProductDiscovery,
   generateStrategicWeeklyPlan,
   type DetailLevel,
+  type ResearchStatus,
   type StrategyMode,
 } from "@/lib/ai/strategic-planner";
 import { toNumberSafe } from "@/lib/analytics";
@@ -67,6 +68,7 @@ const DISCOVERY_WARNING = "AI_PRODUCT_DISCOVERY_WARNING";
 // Phase 13.3.1 — log fast-discovery (ngắn gọn).
 const DISC_STARTED = "AI_DISCOVERY_STARTED";
 const DISC_RESEARCH_DONE = "AI_DISCOVERY_RESEARCH_DONE";
+const DISC_TAVILY_TIMEOUT = "AI_DISCOVERY_TAVILY_TIMEOUT";
 const DISC_FALLBACK = "AI_DISCOVERY_FALLBACK_USED";
 const DISC_SUCCESS = "AI_DISCOVERY_SUCCESS";
 const DISC_FAILED = "AI_DISCOVERY_FAILED";
@@ -400,57 +402,119 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
       recommendation_id: id,
     });
 
-    let research: MarketResearchInsights | null = null;
+    // Tavily NHẸ & TÙY CHỌN: 3 query × 2 kết quả, ≤6 nguồn, 5s/query, tổng ngân sách 10s.
+    let researchStatus: ResearchStatus = "FALLBACK_ONLY";
     let researchRunId: string | null = null;
+    let snippets: { title: string; snippet: string }[] = [];
+
     if (input.use_market_research) {
-      const rr = await runMarketResearchForWeeklyPlan(
-        {
-          week_start: weekStart,
-          week_end: weekEnd,
+      const queries = generateResearchQueries({
+        products: [],
+        goal,
+        target_customer: input.target_customer?.trim() || null,
+        notes: input.notes?.trim() || null,
+        planner_mode: "DISCOVERY_ONLY",
+      }).slice(0, 3);
+
+      const provider = getSearchProvider();
+      const { data: run } = await supabase
+        .from("market_research_runs")
+        .insert({
           goal,
-          target_customer: input.target_customer,
-          notes: input.notes,
-          planner_mode: "DISCOVERY_ONLY",
-        },
-        { maxQueries: 4, maxResults: 2, maxSources: 8 },
-      );
-      if (rr.ok) {
-        const { data: runRow } = await supabase
-          .from("market_research_runs")
-          .select("insights")
-          .eq("id", rr.research_run_id)
-          .single();
-        if (runRow?.insights) {
-          research = runRow.insights as MarketResearchInsights;
-          researchRunId = rr.research_run_id;
-        }
+          target_customer: input.target_customer?.trim() || null,
+          week_start: weekStart || null,
+          week_end: weekEnd || null,
+          status: "RUNNING",
+          provider,
+          queries,
+        })
+        .select("id")
+        .single();
+      researchRunId = (run?.id as string) ?? null;
+
+      const collected: (SearchResult & { query: string })[] = [];
+      let completed = false;
+      const searchAll = Promise.all(
+        queries.map(async (q) => {
+          try {
+            const r = await searchWeb(q, { maxResults: 2, timeoutMs: 5000 });
+            for (const x of r) collected.push({ query: q, ...x });
+          } catch {
+            /* bỏ qua 1 query lỗi */
+          }
+        }),
+      ).then(() => {
+        completed = true;
+      });
+      // Tổng ngân sách 10s cho toàn bộ research.
+      await Promise.race([searchAll, new Promise((res) => setTimeout(res, 10_000))]);
+
+      const flat = collected.slice(0, 6);
+      const timedOut = !completed;
+      if (timedOut) {
+        await insertPostingLog(supabase, null, DISC_TAVILY_TIMEOUT, "FAILED", "Tavily vượt ngân sách 10s — tiếp tục bằng fallback.", {
+          recommendation_id: id,
+        });
       }
-      await insertPostingLog(supabase, null, DISC_RESEARCH_DONE, "SUCCESS", `Nghiên cứu xong (nguồn: ${researchRunId ? "có" : "ít/không"}).`, {
+      researchStatus = flat.length === 0 ? "FALLBACK_ONLY" : timedOut ? "PARTIAL_RESEARCH" : "USED_TAVILY";
+      snippets = flat.map((r) => ({ title: r.title || "", snippet: r.snippet || "" }));
+
+      if (researchRunId) {
+        if (flat.length > 0) {
+          await supabase.from("market_research_sources").insert(
+            flat.map((r) => ({
+              research_run_id: researchRunId,
+              query: r.query,
+              title: r.title,
+              url: r.url,
+              snippet: r.snippet ?? null,
+              content: r.content ?? null,
+              source_type: r.source_type ?? provider,
+              relevance_score: r.relevance_score ?? null,
+            })),
+          );
+        }
+        await supabase
+          .from("market_research_runs")
+          .update({
+            status: flat.length > 0 ? "SUCCESS" : "FAILED",
+            raw_response: { provider, query_count: queries.length, source_count: flat.length, research_status: researchStatus },
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", researchRunId);
+        if (flat.length === 0) researchRunId = null; // không có nguồn -> không gắn vào kế hoạch
+      }
+
+      await insertPostingLog(supabase, null, DISC_RESEARCH_DONE, "SUCCESS", `Nghiên cứu: ${flat.length} nguồn, status=${researchStatus}.`, {
         recommendation_id: id,
       });
     }
 
-    const { plan: rawPlan, fallback } = await generateProductDiscovery({
-      goal,
-      week_start: weekStart,
-      week_end: weekEnd,
-      target_customer: input.target_customer?.trim() || null,
-      priority_notes: input.priority_notes?.trim() || null,
-      strategy_mode: input.strategy_mode ?? null,
-      detail_level: input.detail_level ?? "detailed",
-      planner_mode: "DISCOVERY_ONLY",
-      products: [],
-      summary: EMPTY_SUMMARY,
-      research,
-    });
-    if (fallback) {
-      await insertPostingLog(supabase, null, DISC_FALLBACK, "SUCCESS", "Dùng nhóm hạt giống để bổ sung sản phẩm (research/AI hạn chế).", {
+    const { plan: rawPlan, fallback } = await generateProductDiscovery(
+      {
+        goal,
+        week_start: weekStart,
+        week_end: weekEnd,
+        target_customer: input.target_customer?.trim() || null,
+        priority_notes: input.priority_notes?.trim() || null,
+        strategy_mode: input.strategy_mode ?? null,
+        detail_level: input.detail_level ?? "detailed",
+        planner_mode: "DISCOVERY_ONLY",
+        products: [],
+        summary: EMPTY_SUMMARY,
+        research: null,
+      },
+      { researchStatus, sources: snippets },
+    );
+    if (fallback || researchStatus === "FALLBACK_ONLY") {
+      await insertPostingLog(supabase, null, DISC_FALLBACK, "SUCCESS", "Dùng nhóm hạt giống để tạo/bổ sung sản phẩm.", {
         recommendation_id: id,
       });
     }
 
     const plan = normalizeCampaignPlan(rawPlan);
     const qualityWarnings = validateCampaignPlanQuality(plan, goal, "DISCOVERY_ONLY");
+    if (researchStatus === "FALLBACK_ONLY") qualityWarnings.push("Research fallback used.");
 
     const { error: updErr } = await supabase
       .from("ai_campaign_recommendations")
@@ -461,7 +525,7 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
         summary: plan.executive_summary,
         ai_reasoning_summary: plan.executive_summary,
         research_run_id: researchRunId,
-        market_research: research,
+        market_research: null,
         executive_summary: plan.executive_summary,
         market_diagnosis: plan.market_diagnosis,
         internal_data_diagnosis: plan.internal_data_diagnosis,
@@ -484,7 +548,7 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
     if (updErr) throw new Error(updErr.message);
 
     const oppCount = plan.product_discovery_strategy.new_product_opportunities.length;
-    await insertPostingLog(supabase, null, DISC_SUCCESS, "SUCCESS", `Khám phá ${oppCount} sản phẩm mới nên tìm link.`, {
+    await insertPostingLog(supabase, null, DISC_SUCCESS, "SUCCESS", `Khám phá ${oppCount} sản phẩm mới (research_status=${researchStatus}).`, {
       recommendation_id: id,
     });
     if (qualityWarnings.length > 0) {

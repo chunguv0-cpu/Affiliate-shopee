@@ -50,12 +50,12 @@ function mockResults(query: string, maxResults: number): SearchResult[] {
   return base.slice(0, Math.max(1, maxResults));
 }
 
-async function searchTavily(query: string, maxResults: number): Promise<SearchResult[] | null> {
+async function searchTavily(query: string, maxResults: number, timeoutMs = 8000): Promise<SearchResult[] | null> {
   const apiKey = process.env.TAVILY_API_KEY?.trim();
   if (!apiKey) return null;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch("https://api.tavily.com/search", {
       method: "POST",
@@ -91,13 +91,13 @@ async function searchTavily(query: string, maxResults: number): Promise<SearchRe
   }
 }
 
-async function searchGoogleCse(query: string, maxResults: number): Promise<SearchResult[] | null> {
+async function searchGoogleCse(query: string, maxResults: number, timeoutMs = 8000): Promise<SearchResult[] | null> {
   const key = process.env.GOOGLE_CSE_API_KEY?.trim();
   const cx = process.env.GOOGLE_CSE_CX?.trim();
   if (!key || !cx) return null;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const url =
       `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(key)}` +
@@ -129,17 +129,18 @@ async function searchGoogleCse(query: string, maxResults: number): Promise<Searc
  */
 export async function searchWeb(
   query: string,
-  options?: { maxResults?: number },
+  options?: { maxResults?: number; timeoutMs?: number },
 ): Promise<SearchResult[]> {
   const maxResults = options?.maxResults ?? 5;
+  const timeoutMs = options?.timeoutMs ?? 8000;
   const provider = getSearchProvider();
 
   if (provider === "tavily") {
-    const r = await searchTavily(query, maxResults);
+    const r = await searchTavily(query, maxResults, timeoutMs);
     return r ?? mockResults(query, maxResults); // thiếu key -> mock
   }
   if (provider === "google_cse") {
-    const r = await searchGoogleCse(query, maxResults);
+    const r = await searchGoogleCse(query, maxResults, timeoutMs);
     return r ?? mockResults(query, maxResults);
   }
   return mockResults(query, maxResults);
