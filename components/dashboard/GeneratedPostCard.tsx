@@ -82,11 +82,18 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
                 🔗 {shortenLink(affiliateLink)}
               </a>
             ) : null}
-            {post.campaigns?.name ? (
-              <div className="mt-1">
-                <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700">
-                  🚀 {post.campaigns.name}
-                </span>
+            {post.campaigns?.name || post.content_angle_variant ? (
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {post.campaigns?.name ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700">
+                    🚀 {post.campaigns.name}
+                  </span>
+                ) : null}
+                {post.content_angle_variant ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
+                    ✍️ Góc viết: {post.content_angle_variant}
+                  </span>
+                ) : null}
               </div>
             ) : null}
           </div>

@@ -53,6 +53,7 @@ export type GeneratedPost = {
   published_at: string | null;
   error_log: string | null;
   campaign_id: string | null;
+  content_angle_variant: string | null;
   created_at: string;
   updated_at: string;
   products?: {
@@ -98,6 +99,15 @@ export const CAMPAIGN_STATUS_LABELS: Record<CampaignStatus, string> = {
 
 /** Khung giờ đăng mặc định cho chiến dịch (giờ Việt Nam, ICT +07:00). */
 export const CAMPAIGN_DEFAULT_TIME_SLOTS = ["08:00", "11:30", "15:00", "20:30"];
+
+/** Các góc viết (content angle) để 1 sản phẩm tạo nhiều bài khác nhau. */
+export const CONTENT_ANGLE_VARIANTS = [
+  "Deal nhanh",
+  "Review thật",
+  "Mua dự trữ",
+  "Combo kéo traffic",
+  "Story cá nhân",
+];
 
 /** Một dòng nhật ký trong bảng posting_logs. */
 export type PostingLog = {

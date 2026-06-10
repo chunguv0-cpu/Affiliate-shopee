@@ -8,6 +8,7 @@ import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import {
   CAMPAIGN_DEFAULT_TIME_SLOTS,
+  CONTENT_ANGLE_VARIANTS,
   type Campaign,
   type GeneratedPostStatus,
   type Product,
@@ -112,6 +113,13 @@ export async function createCampaignAndSchedulePosts(
   const postsPerDay = readInt(formData, "posts_per_day", 0);
   if (postsPerDay < 1) return { ok: false, error: "Số bài mỗi ngày phải >= 1." };
 
+  // Phase 10.1: cho phép lặp sản phẩm để lấp đầy lịch bằng nhiều góc viết.
+  const allowRepeatProducts = formData.get("allowRepeatProducts") === "true";
+  const maxVariantsPerProduct = Math.min(
+    5,
+    Math.max(1, readInt(formData, "maxVariantsPerProduct", 3)),
+  );
+
   const startDate = readText(formData, "start_date");
   if (!startDate) return { ok: false, error: "Ngày bắt đầu là bắt buộc." };
 
@@ -152,11 +160,43 @@ export async function createCampaignAndSchedulePosts(
       return { ok: false, error: "Không tìm thấy sản phẩm đã chọn." };
     }
 
-    // 3) Dựng slot và xác định số bài sẽ tạo (cap 20).
+    // 3) Dựng slot, rồi phân công (sản phẩm + góc viết) cho từng slot.
     const slots = buildSlots(startDate, days, perDayTimes, MAX_POSTS_PER_CAMPAIGN);
-    const count = Math.min(products.length, slots.length, MAX_POSTS_PER_CAMPAIGN);
-    if (count === 0) {
+    if (slots.length === 0) {
       return { ok: false, error: "Không tạo được slot lịch nào. Kiểm tra lại ngày/khung giờ." };
+    }
+    const target = Math.min(slots.length, MAX_POSTS_PER_CAMPAIGN);
+
+    type Assignment = { product: Product; angle: string | null };
+    const assignments: Assignment[] = [];
+
+    if (allowRepeatProducts) {
+      // Lặp sản phẩm để lấp đầy slot; mỗi vòng gán một góc viết khác nhau,
+      // mỗi sản phẩm tối đa maxVariantsPerProduct biến thể.
+      for (
+        let v = 0;
+        v < maxVariantsPerProduct && assignments.length < target;
+        v += 1
+      ) {
+        for (const product of products) {
+          if (assignments.length >= target) break;
+          assignments.push({
+            product,
+            angle: CONTENT_ANGLE_VARIANTS[v % CONTENT_ANGLE_VARIANTS.length],
+          });
+        }
+      }
+    } else {
+      // Logic cũ: mỗi sản phẩm 1 bài.
+      const n = Math.min(products.length, target);
+      for (let i = 0; i < n; i += 1) {
+        assignments.push({ product: products[i], angle: null });
+      }
+    }
+
+    const count = assignments.length;
+    if (count === 0) {
+      return { ok: false, error: "Không có bài nào để tạo." };
     }
 
     // 4) Tạo campaign.
@@ -184,7 +224,7 @@ export async function createCampaignAndSchedulePosts(
     let failedPosts = 0;
 
     for (let i = 0; i < count; i += 1) {
-      const product = products[i];
+      const { product, angle } = assignments[i];
       const scheduledAt = slots[i];
 
       const input: ProductInput = {
@@ -195,6 +235,7 @@ export async function createCampaignAndSchedulePosts(
         target_customer: product.target_customer,
         product_angle: product.product_angle,
         image_url: product.image_url,
+        content_angle_variant: angle,
       };
 
       try {
@@ -216,6 +257,7 @@ export async function createCampaignAndSchedulePosts(
             should_publish: result.should_publish,
             status,
             scheduled_at: scheduledAt,
+            content_angle_variant: angle,
           })
           .select("id")
           .single();
@@ -241,8 +283,8 @@ export async function createCampaignAndSchedulePosts(
           inserted.id as string,
           CAMPAIGN_ACTION,
           "SUCCESS",
-          `Tạo bài chiến dịch (trạng thái: ${status}, điểm: ${result.score}, lịch: ${scheduledAt}).`,
-          { campaign_id: campaignId },
+          `Đã tạo bài campaign với angle: ${angle ?? "(mặc định)"} (trạng thái: ${status}, điểm: ${result.score}).`,
+          { campaign_id: campaignId, content_angle_variant: angle },
         );
       } catch (err) {
         // Lỗi AI cho 1 sản phẩm: ghi bài FAILED + log, KHÔNG dừng cả chiến dịch.
@@ -258,6 +300,7 @@ export async function createCampaignAndSchedulePosts(
             status: "FAILED",
             error_log: message,
             scheduled_at: scheduledAt,
+            content_angle_variant: angle,
           })
           .select("id")
           .single();
@@ -267,7 +310,7 @@ export async function createCampaignAndSchedulePosts(
           (failedRow?.id as string) ?? null,
           CAMPAIGN_ACTION,
           "FAILED",
-          `Tạo caption chiến dịch thất bại: ${message}`,
+          `Tạo caption chiến dịch thất bại (angle: ${angle ?? "(mặc định)"}): ${message}`,
           { product_id: product.id, campaign_id: campaignId },
         );
       }

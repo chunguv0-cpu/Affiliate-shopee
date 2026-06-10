@@ -32,6 +32,11 @@ function ScheduledItem({ post }: { post: GeneratedPost }) {
                 🚀 {post.campaigns.name}
               </span>
             ) : null}
+            {post.content_angle_variant ? (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
+                ✍️ {post.content_angle_variant}
+              </span>
+            ) : null}
           </p>
           <p className="mt-1 line-clamp-2 text-sm text-gray-600">
             {post.caption ?? "—"}

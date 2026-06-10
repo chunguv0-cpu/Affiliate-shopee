@@ -26,6 +26,8 @@ export type ProductInput = {
   target_customer?: string | null;
   product_angle?: string | null;
   image_url?: string | null;
+  /** Góc viết riêng cho bài này (Phase 10.1), vd "Deal nhanh", "Review thật"... */
+  content_angle_variant?: string | null;
 };
 
 /** Kết quả caption do AI sinh ra. */
@@ -66,10 +68,22 @@ function mockGenerate(product: ProductInput): GeneratedCaptionResult {
   const audience = product.target_customer?.trim();
   const price = product.price_note?.trim();
   const angle = product.product_angle?.trim();
+  const variant = product.content_angle_variant?.trim();
 
-  const hook = audience
-    ? `Mình vừa thấy deal ${name} khá ổn cho ${audience}.`
-    : `Mình vừa thấy deal ${name} khá ổn, chia sẻ với mọi người nè.`;
+  // Hook thay đổi theo góc viết (content angle) để mỗi bài khác nhau.
+  const variantHooks: Record<string, string> = {
+    "Deal nhanh": `🔥 ${name} đang có deal, nhanh tay kẻo lỡ!`,
+    "Review thật": `Mình dùng thử ${name} một thời gian rồi, review thật nè.`,
+    "Mua dự trữ": `${name} là món hay dùng, thấy deal là mình gom dự trữ luôn.`,
+    "Combo kéo traffic": `Gom vài deal hay hôm nay — mình để link ${name} trước, ai cần xem thêm nhé.`,
+    "Story cá nhân": `Hôm nay tình cờ thấy lại ${name}, tự nhiên muốn kể mọi người nghe.`,
+  };
+
+  const hook =
+    (variant && variantHooks[variant]) ||
+    (audience
+      ? `Mình vừa thấy deal ${name} khá ổn cho ${audience}.`
+      : `Mình vừa thấy deal ${name} khá ổn, chia sẻ với mọi người nè.`);
 
   const lines: string[] = [hook, ""];
 

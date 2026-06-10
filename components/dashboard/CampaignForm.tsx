@@ -82,6 +82,36 @@ export default function CampaignForm({ products }: { products: Product[] }) {
         </div>
       </div>
 
+      <div className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+        <label className="flex items-center gap-2 text-sm font-medium text-gray-800">
+          <input
+            type="checkbox"
+            name="allowRepeatProducts"
+            value="true"
+            className="h-4 w-4"
+          />
+          Cho phép lặp sản phẩm để lấp đầy lịch
+        </label>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label className="text-sm text-gray-700" htmlFor="c_maxvar">
+            Số biến thể tối đa mỗi sản phẩm
+          </label>
+          <input
+            id="c_maxvar"
+            name="maxVariantsPerProduct"
+            type="number"
+            min={1}
+            max={5}
+            defaultValue={3}
+            className="w-20 rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+          />
+        </div>
+        <p className="mt-2 text-xs text-gray-400">
+          Bật để 1 sản phẩm tạo nhiều bài với các góc viết khác nhau (Deal nhanh,
+          Review thật, Mua dự trữ, Combo kéo traffic, Story cá nhân).
+        </p>
+      </div>
+
       <div>
         <p className={labelClass}>Khung giờ đăng (giờ VN)</p>
         <div className="flex flex-wrap gap-3">

@@ -87,6 +87,7 @@ create table if not exists generated_posts (
   facebook_post_url text,
   published_at      timestamptz,
   error_log         text,
+  content_angle_variant text,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   constraint generated_posts_status_check
