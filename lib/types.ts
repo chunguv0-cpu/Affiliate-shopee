@@ -123,6 +123,22 @@ export const CONTENT_ANGLE_VARIANTS = [
   "Story cá nhân",
 ];
 
+/** Một dòng báo cáo hiệu quả affiliate (Phase 12). */
+export type AffiliateReport = {
+  id: string;
+  report_date: string | null;
+  sub_id: string | null;
+  affiliate_link: string | null;
+  product_name: string | null;
+  clicks: number;
+  orders: number;
+  commission: number;
+  revenue: number;
+  status: string | null;
+  raw_row: unknown;
+  created_at: string;
+};
+
 /** Một dòng nhật ký trong bảng posting_logs. */
 export type PostingLog = {
   id: string;

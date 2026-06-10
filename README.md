@@ -164,6 +164,21 @@ File [`vercel.json`](vercel.json) khai báo chạy **1 lần/ngày** lúc 01:00 
   có `link_status=READY`, `status=ACTIVE`; **không** tự tạo caption/chiến dịch.
 - Giới hạn **tối đa 20 link/lần**. Nếu AI confidence thấp, hãy mở `/dashboard/products` kiểm tra/sửa lại.
 
+## 9c. Import báo cáo Affiliate (Analytics — `/dashboard/analytics`)
+
+- **Xuất báo cáo** từ Shopee Affiliate (file/CSV hiệu quả theo sub_id).
+- Vào `/dashboard/analytics/import` → **dán CSV** vào ô → Preview → Import. App nhận diện
+  linh hoạt tên cột: `sub_id`, `affiliate_link/link`, `clicks/click`, `orders/đơn hàng`,
+  `commission/hoa hồng`, `revenue/doanh thu`, `date/ngày`.
+- App đọc **click, đơn, hoa hồng, doanh thu** và map về sản phẩm/bài đăng theo
+  `sub_id` (hoặc `affiliate_link`).
+- **Nên gắn sub_id ngay từ lúc tạo link affiliate** để map chính xác về sản phẩm/chiến dịch/bài đăng.
+- Nếu báo cáo **không có sub_id**, vẫn import được nhưng chỉ xem được số liệu tổng quát
+  (khó map về bài đăng cụ thể).
+- Chỉ số: tổng clicks/đơn/hoa hồng, **conversion rate** (orders/clicks), **EPC** (hoa hồng/click);
+  bảng theo sub_id / sản phẩm / bài đăng + "Nhận xét nhanh" theo rule.
+- KHÔNG kết nối Shopee API / KHÔNG scrape — chỉ nhập thủ công.
+
 ## 10. Deploy lên Vercel
 
 Trước khi deploy, chạy `npm run check:env` và `npm run build` để chắc chắn không

@@ -18,6 +18,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Chiến dịch", href: "/dashboard/campaigns", icon: "🚀" },
   { label: "Bài đăng", href: "/dashboard/posts", icon: "📝" },
   { label: "Lịch đăng", href: "/dashboard/calendar", icon: "🗓️" },
+  { label: "Hiệu quả", href: "/dashboard/analytics", icon: "📈" },
   { label: "Cấu hình", href: "/dashboard/settings", icon: "⚙️" },
   { label: "Logs", href: "/dashboard/logs", icon: "📜" },
 ];
