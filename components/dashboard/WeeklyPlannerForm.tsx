@@ -64,7 +64,14 @@ export default function WeeklyPlannerForm({
     <form onSubmit={handleSubmit} className="space-y-4">
       {!hasReports ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          Chưa có nhiều dữ liệu hiệu quả. AI sẽ tạo kế hoạch test dựa trên sản phẩm hiện có.
+          Chưa có <strong>dữ liệu báo cáo affiliate</strong> (click/đơn). AI vẫn lập kế
+          hoạch dựa trên sản phẩm READY{" "}
+          <strong>+ nghiên cứu thị trường</strong> (nếu bật bên dưới), nhưng đây là{" "}
+          <strong>kế hoạch test</strong>. Hãy{" "}
+          <a href="/dashboard/analytics/import" className="underline">
+            import báo cáo Affiliate
+          </a>{" "}
+          (có sub_id) để gợi ý sát dữ liệu hơn.
         </div>
       ) : null}
 
