@@ -6,6 +6,7 @@ import type { CampaignGoal, PlannerProduct } from "@/lib/ai/campaign-planner";
 import { normalizeCampaignPlan } from "@/lib/ai/normalize-campaign-plan";
 import { validateCampaignPlanQuality } from "@/lib/ai/plan-quality-checker";
 import {
+  generateProductDiscovery,
   generateStrategicWeeklyPlan,
   type DetailLevel,
   type StrategyMode,
@@ -63,6 +64,42 @@ const QUALITY_ACTION = "AI_PLANNER_QUALITY_WARNING";
 const DISCOVERY_STARTED = "AI_PRODUCT_DISCOVERY_STARTED";
 const DISCOVERY_SUCCESS = "AI_PRODUCT_DISCOVERY_SUCCESS";
 const DISCOVERY_WARNING = "AI_PRODUCT_DISCOVERY_WARNING";
+// Phase 13.3.1 — log fast-discovery (ngắn gọn).
+const DISC_STARTED = "AI_DISCOVERY_STARTED";
+const DISC_RESEARCH_DONE = "AI_DISCOVERY_RESEARCH_DONE";
+const DISC_FALLBACK = "AI_DISCOVERY_FALLBACK_USED";
+const DISC_SUCCESS = "AI_DISCOVERY_SUCCESS";
+const DISC_FAILED = "AI_DISCOVERY_FAILED";
+
+// Phase 13.3.1 — toàn bộ quá trình lập kế hoạch fail an toàn sau 45s.
+const PLAN_TIMEOUT_MS = 45_000;
+const TIMEOUT_MSG = "AI discovery timed out. Try again with fewer research sources.";
+
+// Summary rỗng cho fast discovery (không dùng dữ liệu nội bộ).
+const EMPTY_SUMMARY = {
+  total_clicks: 0,
+  total_orders: 0,
+  total_commission: 0,
+  conversion_rate: 0,
+  epc: 0,
+  has_report_data: false,
+};
+
+function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(msg)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
 const APPROVE_ACTION = "APPROVE_AI_CAMPAIGN_PLAN";
 const REJECT_ACTION = "REJECT_AI_CAMPAIGN_PLAN";
 const RESEARCH_ACTION = "RUN_MARKET_RESEARCH";
@@ -93,11 +130,12 @@ export type ResearchInput = {
  */
 export async function runMarketResearchForWeeklyPlan(
   input: ResearchInput,
-  opts?: { maxQueries?: number; maxResults?: number },
+  opts?: { maxQueries?: number; maxResults?: number; maxSources?: number },
 ): Promise<RunResearchResult> {
   const goal = VALID_GOALS.includes(input?.goal) ? input.goal : "balanced";
   const maxQueries = Math.max(1, Math.min(10, opts?.maxQueries ?? DEFAULT_RESEARCH_MAX_QUERIES));
   const maxResults = Math.max(1, Math.min(5, opts?.maxResults ?? DEFAULT_RESEARCH_MAX_RESULTS_PER_QUERY));
+  const maxSources = Math.max(1, Math.min(MAX_RESEARCH_SOURCES, opts?.maxSources ?? MAX_RESEARCH_SOURCES));
 
   let supabase;
   try {
@@ -169,7 +207,7 @@ export async function runMarketResearchForWeeklyPlan(
         }
       }),
     );
-    const flat = perQuery.flat().slice(0, MAX_RESEARCH_SOURCES);
+    const flat = perQuery.flat().slice(0, maxSources);
 
     if (flat.length > 0) {
       await supabase.from("market_research_sources").insert(
@@ -331,7 +369,7 @@ export async function createRecommendationJob(
 export async function runRecommendationJob(id: string): Promise<RunJobResult> {
   if (!id || typeof id !== "string") return { ok: false, error: "Thiếu mã gợi ý." };
 
-  let supabase;
+  let supabase: ReturnType<typeof createSupabaseAdminClient>;
   try {
     supabase = createSupabaseAdminClient();
   } catch (err) {
@@ -353,7 +391,115 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
   const weekStart = (input.week_start ?? "").trim();
   const weekEnd = (input.week_end ?? "").trim();
 
-  try {
+  // ---------------------------------------------------------------------------
+  // FAST DISCOVERY (DISCOVERY_ONLY): research nhẹ (4 query × 2, ≤8 nguồn) + 1 AI call.
+  // Không tạo kế hoạch 7 ngày đầy đủ. Có fallback seed nếu research/AI yếu.
+  // ---------------------------------------------------------------------------
+  async function runDiscovery(): Promise<void> {
+    await insertPostingLog(supabase, null, DISC_STARTED, "SUCCESS", `Bắt đầu khám phá sản phẩm (mục tiêu: ${goal}).`, {
+      recommendation_id: id,
+    });
+
+    let research: MarketResearchInsights | null = null;
+    let researchRunId: string | null = null;
+    if (input.use_market_research) {
+      const rr = await runMarketResearchForWeeklyPlan(
+        {
+          week_start: weekStart,
+          week_end: weekEnd,
+          goal,
+          target_customer: input.target_customer,
+          notes: input.notes,
+          planner_mode: "DISCOVERY_ONLY",
+        },
+        { maxQueries: 4, maxResults: 2, maxSources: 8 },
+      );
+      if (rr.ok) {
+        const { data: runRow } = await supabase
+          .from("market_research_runs")
+          .select("insights")
+          .eq("id", rr.research_run_id)
+          .single();
+        if (runRow?.insights) {
+          research = runRow.insights as MarketResearchInsights;
+          researchRunId = rr.research_run_id;
+        }
+      }
+      await insertPostingLog(supabase, null, DISC_RESEARCH_DONE, "SUCCESS", `Nghiên cứu xong (nguồn: ${researchRunId ? "có" : "ít/không"}).`, {
+        recommendation_id: id,
+      });
+    }
+
+    const { plan: rawPlan, fallback } = await generateProductDiscovery({
+      goal,
+      week_start: weekStart,
+      week_end: weekEnd,
+      target_customer: input.target_customer?.trim() || null,
+      priority_notes: input.priority_notes?.trim() || null,
+      strategy_mode: input.strategy_mode ?? null,
+      detail_level: input.detail_level ?? "detailed",
+      planner_mode: "DISCOVERY_ONLY",
+      products: [],
+      summary: EMPTY_SUMMARY,
+      research,
+    });
+    if (fallback) {
+      await insertPostingLog(supabase, null, DISC_FALLBACK, "SUCCESS", "Dùng nhóm hạt giống để bổ sung sản phẩm (research/AI hạn chế).", {
+        recommendation_id: id,
+      });
+    }
+
+    const plan = normalizeCampaignPlan(rawPlan);
+    const qualityWarnings = validateCampaignPlanQuality(plan, goal, "DISCOVERY_ONLY");
+
+    const { error: updErr } = await supabase
+      .from("ai_campaign_recommendations")
+      .update({
+        title: plan.title,
+        goal: plan.goal || goal,
+        status: "DRAFT",
+        summary: plan.executive_summary,
+        ai_reasoning_summary: plan.executive_summary,
+        research_run_id: researchRunId,
+        market_research: research,
+        executive_summary: plan.executive_summary,
+        market_diagnosis: plan.market_diagnosis,
+        internal_data_diagnosis: plan.internal_data_diagnosis,
+        goal_strategy: plan.goal_strategy,
+        product_decision_table: plan.product_decision_table,
+        products_to_source: plan.products_to_source,
+        weekly_execution_plan: plan.weekly_execution_plan,
+        engagement_system: plan.engagement_system,
+        creative_brief: plan.creative_brief,
+        measurement_plan: plan.measurement_plan,
+        risks: plan.risks_and_controls,
+        next_actions: plan.next_actions,
+        quality_warnings: qualityWarnings,
+        planner_mode: "DISCOVERY_ONLY",
+        product_discovery_strategy: plan.product_discovery_strategy,
+        error_message: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    if (updErr) throw new Error(updErr.message);
+
+    const oppCount = plan.product_discovery_strategy.new_product_opportunities.length;
+    await insertPostingLog(supabase, null, DISC_SUCCESS, "SUCCESS", `Khám phá ${oppCount} sản phẩm mới nên tìm link.`, {
+      recommendation_id: id,
+    });
+    if (qualityWarnings.length > 0) {
+      await insertPostingLog(supabase, null, QUALITY_ACTION, "FAILED", `Cần kiểm tra: ${qualityWarnings.join("; ")}`.slice(0, 2000), {
+        recommendation_id: id,
+      });
+    }
+    revalidatePath(`/dashboard/ai-planner/${id}`);
+    revalidatePath("/dashboard/ai-planner");
+  }
+
+  // ---------------------------------------------------------------------------
+  // FULL PLAN (HYBRID / EXISTING_ONLY): kế hoạch chiến lược đầy đủ.
+  // ---------------------------------------------------------------------------
+  async function runFull(): Promise<void> {
     const { data: productsData } = await supabase
       .from("products")
       .select("id, product_name, sub_id, affiliate_link")
@@ -428,9 +574,9 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
     let research: MarketResearchInsights | null = null;
     let researchRunId: string | null = null;
     if (input.use_market_research) {
-      // Phase 13.3 — giữ limit an toàn: detailed/very_detailed = 6 query, còn lại 4; 2 kết quả/query.
+      // Phase 13.3.1 — HYBRID chỉ thêm 3 query khám phá; EXISTING_ONLY: detailed=6, còn lại 4.
       const detailed = input.detail_level === "detailed" || input.detail_level === "very_detailed";
-      const maxQueries = detailed ? 6 : 4;
+      const maxQueries = plannerMode === "HYBRID" ? 3 : detailed ? 6 : 4;
       const rr = await runMarketResearchForWeeklyPlan(
         {
           week_start: weekStart,
@@ -440,7 +586,7 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
           notes: input.notes,
           planner_mode: plannerMode,
         },
-        { maxQueries, maxResults: 2 },
+        { maxQueries, maxResults: 2, maxSources: 8 },
       );
       if (rr.ok) {
         const { data: runRow } = await supabase
@@ -545,6 +691,12 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
 
     revalidatePath(`/dashboard/ai-planner/${id}`);
     revalidatePath("/dashboard/ai-planner");
+  }
+
+  // Dispatch + timeout 45s. KHÔNG bao giờ để trạng thái RUNNING treo.
+  try {
+    const work = plannerMode === "DISCOVERY_ONLY" ? runDiscovery() : runFull();
+    await withTimeout(work, PLAN_TIMEOUT_MS, TIMEOUT_MSG);
     return { ok: true, id };
   } catch (err) {
     const m = (err instanceof Error ? err.message : "Lỗi không xác định.").slice(0, 2000);
@@ -555,6 +707,11 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
     await insertPostingLog(supabase, null, JOB_FAILED, "FAILED", `Job lỗi: ${m}`.slice(0, 5000), {
       recommendation_id: id,
     });
+    if (plannerMode === "DISCOVERY_ONLY") {
+      await insertPostingLog(supabase, null, DISC_FAILED, "FAILED", `Khám phá thất bại: ${m}`.slice(0, 2000), {
+        recommendation_id: id,
+      });
+    }
     revalidatePath(`/dashboard/ai-planner/${id}`);
     return { ok: false, id, error: m };
   }

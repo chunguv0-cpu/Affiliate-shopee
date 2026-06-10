@@ -248,6 +248,8 @@ export default async function RecommendationDetailPage({
               </>
             ) : null}
 
+            {plannerMode === "DISCOVERY_ONLY" ? null : (
+            <>
             <Section title="Chẩn đoán thị trường">
               {md.summary ? <p className="text-sm text-gray-700">{md.summary}</p> : null}
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -389,6 +391,8 @@ export default async function RecommendationDetailPage({
                 <div><p className="text-xs font-semibold uppercase text-gray-400">Kiểm tra sau 7 ngày</p><Bullets items={mp.what_to_check_after_7_days} /></div>
               </div>
             </Section>
+            </>
+            )}
 
             <Section title="Rủi ro & việc cần làm tiếp">
               <p className="text-xs font-semibold uppercase text-gray-400">Rủi ro / kiểm soát</p>

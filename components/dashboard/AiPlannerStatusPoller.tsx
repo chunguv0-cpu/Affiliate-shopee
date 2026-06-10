@@ -10,7 +10,7 @@ import {
 
 // Quy tắc polling (hotfix chống spam GET trên Vercel):
 const POLL_INTERVAL_MS = 5000; // tối thiểu 5s
-const MAX_RUN_MS = 10 * 60 * 1000; // dừng poll sau 10 phút
+const MAX_RUN_MS = 5 * 60 * 1000; // job quá 5 phút coi như treo, dừng poll
 
 /**
  * Hiển thị khi gợi ý đang RUNNING.

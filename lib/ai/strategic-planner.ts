@@ -631,6 +631,198 @@ function parsePlan(raw: string, input: StrategicPlanInput): StrategicPlan {
   };
 }
 
+// ===========================================================================
+// Phase 13.3.1 — FAST DISCOVERY (DISCOVERY_ONLY): 1 AI call nhẹ, không tạo
+// kế hoạch 7 ngày đầy đủ. Có fallback seed categories nếu research/AI yếu.
+// ===========================================================================
+
+export const SEED_CATEGORIES: string[] = [
+  "mẹ và bé",
+  "đồ gia dụng thiết yếu",
+  "đồ tiêu dùng mua lặp lại",
+  "phụ kiện điện thoại",
+  "đồ bếp tiện ích",
+  "chăm sóc cá nhân phổ thông",
+  "đồ học tập/văn phòng",
+  "sản phẩm dưới 99k dễ mua",
+  "sản phẩm lạ dễ kéo comment",
+  "sản phẩm theo mùa",
+];
+
+function discoverySourcingWeekly(): ExecDay[] {
+  return [
+    { day: "Ngày 1", theme: "Tìm link sản phẩm ưu tiên cao", posts: [] },
+    { day: "Ngày 2", theme: "Import & enrich sản phẩm vào app", posts: [] },
+    { day: "Ngày 3", theme: "Tạo campaign test sau khi sản phẩm READY", posts: [] },
+    { day: "Ngày 4-7", theme: "Đánh giá tín hiệu & mở rộng nhóm thắng", posts: [] },
+  ];
+}
+
+function parseOpportunities(v: unknown): NewProductOpportunity[] {
+  return arr(v)
+    .map((x) => ({
+      suggested_product: s(x.suggested_product),
+      category: s(x.category),
+      reason: s(x.reason),
+      target_customer: s(x.target_customer),
+      pain_point: s(x.pain_point),
+      suggested_price_band: s(x.suggested_price_band),
+      suggested_search_keywords: sa(x.suggested_search_keywords),
+      content_angle: s(x.content_angle),
+      first_post_hook: s(x.first_post_hook),
+      cta: s(x.cta),
+      priority: s(x.priority, "MEDIUM"),
+      confidence: s(x.confidence, "MEDIUM"),
+    }))
+    .filter((x) => x.suggested_product);
+}
+
+const DISCOVERY_SYSTEM_PROMPT = `Bạn là chuyên gia tìm sản phẩm affiliate Shopee để bán trên Facebook.
+Nhiệm vụ: từ mục tiêu + tệp khách + nghiên cứu thị trường (nếu có), đề xuất SẢN PHẨM MỚI nên đi tìm link affiliate.
+
+RULE CỨNG:
+- BỎ QUA sản phẩm đã import; đây là chế độ KHÁM PHÁ sản phẩm mới.
+- Tạo ÍT NHẤT 10 sản phẩm, đa dạng nhóm hàng (không trùng lặp).
+- KHÔNG bịa giá cụ thể (chỉ ghi khoảng: thấp/trung bình/cao). KHÔNG bịa link.
+- Nếu research ít/không có, dùng các NHÓM HẠT GIỐNG được cung cấp và đặt confidence = LOW hoặc MEDIUM.
+- Nói rõ: các sản phẩm này CHƯA có link affiliate, người dùng phải tìm + import link trước khi tạo campaign thật.
+- weekly_execution_plan NGẮN, tập trung tìm nguồn (không phải lịch đăng sản phẩm thật).
+
+CHỈ trả về JSON đúng schema (không thêm text ngoài JSON):
+{
+"title":"Chiến lược tìm sản phẩm mới",
+"executive_summary":"",
+"product_discovery_strategy":{"discovery_summary":"","recommended_categories":[{"category":"","why_now":"","target_customer":"","purchase_intent":"HIGH|MEDIUM|LOW","content_potential":"HIGH|MEDIUM|LOW","risk":""}],"new_product_opportunities":[{"suggested_product":"","category":"","reason":"","target_customer":"","pain_point":"","suggested_price_band":"thấp|trung bình|cao","suggested_search_keywords":[""],"content_angle":"","first_post_hook":"","cta":"","priority":"HIGH|MEDIUM|LOW","confidence":"HIGH|MEDIUM|LOW"}],"sourcing_plan":[{"step":"","detail":""}]},
+"next_actions":[""],
+"risks_and_controls":[""]
+}`;
+
+function buildDiscoveryUserPrompt(input: StrategicPlanInput): string {
+  const r = input.research;
+  return [
+    `MỤC TIÊU: ${GOAL_LABELS[input.goal]} (${input.goal})`,
+    `Tệp khách ưu tiên: ${input.target_customer ?? "(không chỉ định)"}`,
+    `Ưu tiên của người dùng: ${input.priority_notes ?? "(không có)"}`,
+    "",
+    r
+      ? [
+          "NGHIÊN CỨU THỊ TRƯỜNG (tóm tắt):",
+          `- ${r.market_summary}`,
+          `- Pain points: ${r.customer_pain_points.join("; ")}`,
+          `- Xu hướng: ${r.trend_opportunities.join("; ")}`,
+          `- Nhóm SP gợi ý: ${r.recommended_product_groups.map((g) => g.group).join("; ")}`,
+        ].join("\n")
+      : "NGHIÊN CỨU THỊ TRƯỜNG: (ít/không có — hãy dùng nhóm hạt giống bên dưới, confidence LOW/MEDIUM)",
+    "",
+    `NHÓM HẠT GIỐNG (fallback nếu research yếu): ${SEED_CATEGORIES.join(", ")}`,
+    "",
+    "Hãy đề xuất >=10 sản phẩm mới đa dạng nhóm. CHỈ trả về JSON đúng schema.",
+  ].join("\n");
+}
+
+/**
+ * Tạo chiến lược khám phá sản phẩm (nhẹ, 1 AI call). Trả về StrategicPlan rút gọn.
+ * fallback=true khi dùng seed (provider mock / AI lỗi / thiếu dữ liệu / phải bù seed).
+ */
+export async function generateProductDiscovery(
+  input: StrategicPlanInput,
+): Promise<{ plan: StrategicPlan; fallback: boolean }> {
+  const seed = buildDiscoveryStrategy({ ...input, planner_mode: "DISCOVERY_ONLY" });
+  const shortWeekly = discoverySourcingWeekly();
+
+  const assemble = (pds: ProductDiscoveryStrategy, summary: string): StrategicPlan => ({
+    title: "Chiến lược tìm sản phẩm mới",
+    goal: GOAL_LABELS[input.goal],
+    planner_mode: "DISCOVERY_ONLY",
+    product_discovery_strategy: pds,
+    executive_summary: summary || seed.discovery_summary,
+    market_diagnosis: { summary: "", customer_pain_points: [], purchase_triggers: [], content_patterns: [], source_based_insights: [] },
+    internal_data_diagnosis: { data_quality: "TEST_ONLY", summary: "", what_we_know: [], what_we_do_not_know: [], testing_assumption: [] },
+    goal_strategy: { main_strategy: "", why_this_strategy: "", funnel_logic: "", do: [], avoid: [] },
+    product_decision_table: [],
+    products_to_source: [],
+    weekly_execution_plan: shortWeekly,
+    engagement_system: { comment_baits_safe: [], save_triggers: [], trust_builders: [], conversion_boosters: [] },
+    creative_brief: { visual_direction: [], copywriting_rules: [], tone: "" },
+    measurement_plan: { primary_metric: "", secondary_metrics: [], success_threshold: "", what_to_check_after_7_days: [] },
+    risks_and_controls: [
+      "Các sản phẩm đề xuất CHƯA có link affiliate — cần tìm & import link trước khi tạo campaign thật.",
+      "Không bịa giá/công dụng; kiểm tra giá & tồn kho thực tế khi tìm link.",
+    ],
+    next_actions: [
+      "Tìm link Shopee cho các sản phẩm ưu tiên cao.",
+      "Chuyển link affiliate + sub_id rồi import vào app để enrich.",
+      "Tạo campaign test sau khi sản phẩm chuyển READY.",
+    ],
+    raw_ai_response: null,
+  });
+
+  const provider = getAIProvider();
+  if (provider === "mock") return { plan: assemble(seed, ""), fallback: true };
+
+  try {
+    const { apiKey, baseURL, model } = resolveProviderConfig(provider);
+    const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+    const completion = await client.chat.completions.create({
+      model,
+      temperature: 0.6,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: DISCOVERY_SYSTEM_PROMPT },
+        { role: "user", content: buildDiscoveryUserPrompt(input) },
+      ],
+    });
+    const raw = completion.choices[0]?.message?.content ?? "";
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start === -1 || end === -1) return { plan: assemble(seed, ""), fallback: true };
+    let o: Record<string, unknown>;
+    try {
+      o = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+    } catch {
+      return { plan: assemble(seed, ""), fallback: true };
+    }
+    const pdsRaw = obj(o.product_discovery_strategy);
+    let opps = parseOpportunities(pdsRaw.new_product_opportunities);
+    if (opps.length === 0) return { plan: assemble(seed, ""), fallback: true };
+
+    // Bù cho đủ >=10 từ seed (không trùng tên).
+    let toppedUp = false;
+    if (opps.length < 10) {
+      const have = new Set(opps.map((x) => x.suggested_product.toLowerCase()));
+      for (const sd of seed.new_product_opportunities) {
+        if (opps.length >= 10) break;
+        const key = sd.suggested_product.toLowerCase();
+        if (!have.has(key)) {
+          opps = [...opps, sd];
+          have.add(key);
+          toppedUp = true;
+        }
+      }
+    }
+
+    const cats = arr(pdsRaw.recommended_categories).map((x) => ({
+      category: s(x.category),
+      why_now: s(x.why_now),
+      target_customer: s(x.target_customer),
+      purchase_intent: s(x.purchase_intent, "MEDIUM"),
+      content_potential: s(x.content_potential, "MEDIUM"),
+      risk: s(x.risk),
+    })).filter((x) => x.category);
+    const sourcing = arr(pdsRaw.sourcing_plan).map((x) => ({ step: s(x.step), detail: s(x.detail) })).filter((x) => x.step);
+
+    const pds: ProductDiscoveryStrategy = {
+      discovery_summary: s(pdsRaw.discovery_summary, seed.discovery_summary),
+      recommended_categories: cats.length > 0 ? cats : seed.recommended_categories,
+      new_product_opportunities: opps,
+      sourcing_plan: sourcing.length > 0 ? sourcing : seed.sourcing_plan,
+    };
+    return { plan: assemble(pds, s(o.executive_summary)), fallback: toppedUp };
+  } catch {
+    return { plan: assemble(seed, ""), fallback: true };
+  }
+}
+
 export async function generateStrategicWeeklyPlan(
   input: StrategicPlanInput,
 ): Promise<StrategicPlan> {
