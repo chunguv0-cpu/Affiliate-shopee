@@ -82,6 +82,13 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
                 🔗 {shortenLink(affiliateLink)}
               </a>
             ) : null}
+            {post.campaigns?.name ? (
+              <div className="mt-1">
+                <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700">
+                  🚀 {post.campaigns.name}
+                </span>
+              </div>
+            ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {stateLabel.text ? (

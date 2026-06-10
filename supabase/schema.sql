@@ -45,11 +45,37 @@ create trigger trg_products_updated_at
   execute function update_updated_at_column();
 
 -- =============================================================================
+-- 1b) campaigns (Phase 10) — đặt trước generated_posts vì có FK tham chiếu.
+-- =============================================================================
+create table if not exists campaigns (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null,
+  description text,
+  status      text not null default 'DRAFT',
+  start_at    timestamptz,
+  end_at      timestamptz,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  constraint campaigns_status_check
+    check (status in ('DRAFT', 'ACTIVE', 'COMPLETED', 'PAUSED'))
+);
+
+create index if not exists idx_campaigns_status    on campaigns (status);
+create index if not exists idx_campaigns_created_at on campaigns (created_at desc);
+
+drop trigger if exists trg_campaigns_updated_at on campaigns;
+create trigger trg_campaigns_updated_at
+  before update on campaigns
+  for each row
+  execute function update_updated_at_column();
+
+-- =============================================================================
 -- 2) generated_posts
 -- =============================================================================
 create table if not exists generated_posts (
   id                uuid primary key default gen_random_uuid(),
   product_id        uuid references products (id) on delete cascade,
+  campaign_id       uuid references campaigns (id) on delete set null,
   caption           text,
   hook              text,
   ai_score          int,
@@ -68,6 +94,7 @@ create table if not exists generated_posts (
 );
 
 create index if not exists idx_generated_posts_product_id   on generated_posts (product_id);
+create index if not exists idx_generated_posts_campaign_id  on generated_posts (campaign_id);
 create index if not exists idx_generated_posts_status       on generated_posts (status);
 create index if not exists idx_generated_posts_scheduled_at on generated_posts (scheduled_at);
 create index if not exists idx_generated_posts_created_at   on generated_posts (created_at desc);

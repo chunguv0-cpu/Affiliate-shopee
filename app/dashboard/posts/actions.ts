@@ -168,10 +168,19 @@ export async function generatePostFromProduct(
 export async function getGeneratedPosts(): Promise<GeneratedPostsResult> {
   try {
     const supabase = createSupabaseAdminClient();
-    const { data, error } = await supabase
+
+    // Thử kèm tên chiến dịch; nếu chưa chạy migration campaigns thì fallback.
+    let { data, error } = await supabase
       .from("generated_posts")
-      .select("*, products(product_name, affiliate_link)")
+      .select("*, products(product_name, affiliate_link), campaigns(name)")
       .order("created_at", { ascending: false });
+
+    if (error) {
+      ({ data, error } = await supabase
+        .from("generated_posts")
+        .select("*, products(product_name, affiliate_link)")
+        .order("created_at", { ascending: false }));
+    }
 
     if (error) {
       return { ok: false, error: `Không tải được danh sách bài AI: ${error.message}` };
@@ -388,11 +397,21 @@ export async function clearPostSchedule(
 export async function getScheduledPosts(): Promise<GeneratedPostsResult> {
   try {
     const supabase = createSupabaseAdminClient();
-    const { data, error } = await supabase
+
+    // Thử kèm tên chiến dịch; nếu chưa chạy migration campaigns thì fallback.
+    let { data, error } = await supabase
       .from("generated_posts")
-      .select("*, products(product_name, affiliate_link)")
+      .select("*, products(product_name, affiliate_link), campaigns(name)")
       .not("scheduled_at", "is", null)
       .order("scheduled_at", { ascending: true });
+
+    if (error) {
+      ({ data, error } = await supabase
+        .from("generated_posts")
+        .select("*, products(product_name, affiliate_link)")
+        .not("scheduled_at", "is", null)
+        .order("scheduled_at", { ascending: true }));
+    }
 
     if (error) {
       return { ok: false, error: `Không tải được lịch đăng: ${error.message}` };

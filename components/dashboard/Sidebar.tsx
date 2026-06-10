@@ -13,6 +13,7 @@ export type NavItem = {
 export const NAV_ITEMS: NavItem[] = [
   { label: "Tổng quan", href: "/dashboard", icon: "📊" },
   { label: "Sản phẩm", href: "/dashboard/products", icon: "🛍️" },
+  { label: "Chiến dịch", href: "/dashboard/campaigns", icon: "🚀" },
   { label: "Bài đăng", href: "/dashboard/posts", icon: "📝" },
   { label: "Lịch đăng", href: "/dashboard/calendar", icon: "🗓️" },
   { label: "Cấu hình", href: "/dashboard/settings", icon: "⚙️" },

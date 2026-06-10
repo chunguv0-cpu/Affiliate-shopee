@@ -52,11 +52,15 @@ export type GeneratedPost = {
   facebook_post_url: string | null;
   published_at: string | null;
   error_log: string | null;
+  campaign_id: string | null;
   created_at: string;
   updated_at: string;
   products?: {
     product_name: string;
     affiliate_link: string;
+  } | null;
+  campaigns?: {
+    name: string;
   } | null;
 };
 
@@ -70,6 +74,30 @@ export const GENERATED_POST_STATUS_LABELS: Record<GeneratedPostStatus, string> =
   SKIPPED: "Bỏ qua",
   PUBLISHING: "Đang đăng",
 };
+
+export type CampaignStatus = "DRAFT" | "ACTIVE" | "COMPLETED" | "PAUSED";
+
+export type Campaign = {
+  id: string;
+  name: string;
+  description: string | null;
+  status: CampaignStatus;
+  start_at: string | null;
+  end_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Nhãn tiếng Việt cho trạng thái chiến dịch. */
+export const CAMPAIGN_STATUS_LABELS: Record<CampaignStatus, string> = {
+  DRAFT: "Nháp",
+  ACTIVE: "Đang chạy",
+  COMPLETED: "Hoàn tất",
+  PAUSED: "Tạm dừng",
+};
+
+/** Khung giờ đăng mặc định cho chiến dịch (giờ Việt Nam, ICT +07:00). */
+export const CAMPAIGN_DEFAULT_TIME_SLOTS = ["08:00", "11:30", "15:00", "20:30"];
 
 /** Một dòng nhật ký trong bảng posting_logs. */
 export type PostingLog = {

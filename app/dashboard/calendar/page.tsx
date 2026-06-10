@@ -27,6 +27,11 @@ function ScheduledItem({ post }: { post: GeneratedPost }) {
           </div>
           <p className="mt-2 font-medium text-gray-900">
             {post.products?.product_name ?? "Sản phẩm không xác định"}
+            {post.campaigns?.name ? (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700">
+                🚀 {post.campaigns.name}
+              </span>
+            ) : null}
           </p>
           <p className="mt-1 line-clamp-2 text-sm text-gray-600">
             {post.caption ?? "—"}
