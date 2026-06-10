@@ -5,6 +5,7 @@ import PageHeader from "@/components/dashboard/PageHeader";
 import RecommendationStatusButtons from "@/components/dashboard/RecommendationStatusButtons";
 import {
   getCampaignRecommendationById,
+  getResearchRun,
   getResearchSources,
 } from "@/app/dashboard/ai-planner/actions";
 import type {
@@ -58,6 +59,7 @@ export default async function RecommendationDetailPage({
   const concept = (rec.campaign_concept ?? null) as CampaignConcept | null;
   const mr = (rec.market_research ?? null) as MarketResearchInsights | null;
   const sources = rec.research_run_id ? await getResearchSources(rec.research_run_id) : [];
+  const runMeta = rec.research_run_id ? await getResearchRun(rec.research_run_id) : null;
 
   return (
     <div>
@@ -70,6 +72,20 @@ export default async function RecommendationDetailPage({
           </Link>
         }
       />
+
+      {/* Badge research */}
+      <div className="mb-4">
+        {rec.research_run_id ? (
+          <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+            🔍 Có nghiên cứu thị trường · provider: {runMeta?.provider ?? "—"} ·{" "}
+            {runMeta?.query_count ?? 0} query · {sources.length} nguồn
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-2 rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-500">
+            Không dùng nghiên cứu thị trường (chỉ dữ liệu nội bộ)
+          </span>
+        )}
+      </div>
 
       <div className="space-y-6">
         {/* Tổng quan */}
@@ -87,6 +103,10 @@ export default async function RecommendationDetailPage({
 
         {/* Sản phẩm đề xuất */}
         <Section title="Sản phẩm AI đề xuất">
+          <p className="mb-3 text-xs text-gray-400">
+            Chỉ gồm sản phẩm READY trong kho của bạn — nghiên cứu thị trường định
+            hướng <strong>cách đẩy</strong> (angle/hook/nhóm), không thêm sản phẩm chưa có link.
+          </p>
           {products.length === 0 ? (
             <p className="text-sm text-gray-500">Không có đề xuất sản phẩm.</p>
           ) : (
@@ -249,6 +269,26 @@ export default async function RecommendationDetailPage({
                 <ul className="mt-1 space-y-1 text-sm text-gray-700">
                   {mr.engagement_tactics.map((t, i) => (
                     <li key={i}>• <strong>{t.tactic}</strong>{t.example ? ` — ${t.example}` : ""}{t.risk ? ` (⚠ ${t.risk})` : ""}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {mr.content_hooks?.length ? (
+              <div className="mt-3">
+                <p className="text-xs font-semibold uppercase text-gray-400">Hook gợi ý từ research</p>
+                <ul className="mt-1 space-y-1 text-sm text-gray-700">
+                  {mr.content_hooks.map((h, i) => (
+                    <li key={i}>• “{h.hook}”{h.best_for_product ? ` — hợp với: ${h.best_for_product}` : ""}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {mr.recommended_product_groups?.length ? (
+              <div className="mt-3">
+                <p className="text-xs font-semibold uppercase text-gray-400">Nhóm sản phẩm nên đẩy (theo research)</p>
+                <ul className="mt-1 space-y-1 text-sm text-gray-700">
+                  {mr.recommended_product_groups.map((g, i) => (
+                    <li key={i}>• <strong>{g.group}</strong>{g.reason ? ` — ${g.reason}` : ""}{g.products?.length ? ` [${g.products.join(", ")}]` : ""}</li>
                   ))}
                 </ul>
               </div>

@@ -531,6 +531,33 @@ export async function getResearchSources(runId: string): Promise<ResearchSource[
   }
 }
 
+export type ResearchRunMeta = {
+  provider: string | null;
+  status: string | null;
+  query_count: number;
+};
+
+/** Lấy meta của research run (provider/status/số query) cho badge. */
+export async function getResearchRun(runId: string): Promise<ResearchRunMeta | null> {
+  try {
+    if (!runId) return null;
+    const supabase = createSupabaseAdminClient();
+    const { data } = await supabase
+      .from("market_research_runs")
+      .select("provider, status, queries")
+      .eq("id", runId)
+      .single();
+    if (!data) return null;
+    return {
+      provider: (data.provider as string | null) ?? null,
+      status: (data.status as string | null) ?? null,
+      query_count: Array.isArray(data.queries) ? data.queries.length : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export type StatusActionResult = { ok: true } | { ok: false; error: string };
 
 export async function updateRecommendationStatus(
