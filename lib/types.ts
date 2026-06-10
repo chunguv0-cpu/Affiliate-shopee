@@ -139,6 +139,40 @@ export type AffiliateReport = {
   created_at: string;
 };
 
+export type RecommendationStatus =
+  | "DRAFT"
+  | "APPROVED"
+  | "REJECTED"
+  | "CONVERTED_TO_CAMPAIGN";
+
+export const RECOMMENDATION_STATUS_LABELS: Record<RecommendationStatus, string> = {
+  DRAFT: "Nháp",
+  APPROVED: "Đã duyệt",
+  REJECTED: "Từ chối",
+  CONVERTED_TO_CAMPAIGN: "Đã tạo chiến dịch",
+};
+
+/** Một bản ghi gợi ý chiến dịch tuần do AI tạo (Phase 13). */
+export type AICampaignRecommendation = {
+  id: string;
+  title: string;
+  goal: string | null;
+  week_start: string | null;
+  week_end: string | null;
+  status: RecommendationStatus;
+  summary: string | null;
+  strategy: string | null;
+  recommended_products: unknown;
+  recommended_schedule: unknown;
+  content_angles: unknown;
+  engagement_hooks: unknown;
+  risks: unknown;
+  ai_reasoning_summary: string | null;
+  raw_ai_response: unknown;
+  created_at: string;
+  updated_at: string;
+};
+
 /** Một dòng nhật ký trong bảng posting_logs. */
 export type PostingLog = {
   id: string;

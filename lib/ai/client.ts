@@ -251,7 +251,7 @@ function mockInfer(input: InferProductInput): InferredProductInfo {
 }
 
 /** Đọc cấu hình provider (v98/openai) cho gọi chat JSON. */
-function resolveProviderConfig(provider: "v98" | "openai"): {
+export function resolveProviderConfig(provider: "v98" | "openai"): {
   apiKey: string;
   baseURL?: string;
   model: string;

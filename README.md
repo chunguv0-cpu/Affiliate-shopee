@@ -179,6 +179,21 @@ File [`vercel.json`](vercel.json) khai báo chạy **1 lần/ngày** lúc 01:00 
   bảng theo sub_id / sản phẩm / bài đăng + "Nhận xét nhanh" theo rule.
 - KHÔNG kết nối Shopee API / KHÔNG scrape — chỉ nhập thủ công.
 
+## 9d. AI Weekly Campaign Planner (`/dashboard/ai-planner`)
+
+- AI phân tích **sản phẩm READY**, **bài đã đăng 30 ngày**, **báo cáo affiliate (sub_id)**
+  và **campaign cũ** để đề xuất kế hoạch chiến dịch cho **tuần này**.
+- **Cách tạo:** vào *Gợi ý AI* → chọn Tuần bắt đầu/kết thúc, **Mục tiêu**, tệp khách, ghi chú →
+  *Tạo gợi ý chiến dịch* → mở trang chi tiết để xem.
+- **Ý nghĩa mục tiêu:**
+  - `clicks` — ưu tiên kéo click (hook mạnh, sản phẩm nhu cầu cao).
+  - `orders` — ưu tiên chuyển đổi thành đơn.
+  - `commission` — ưu tiên sản phẩm hoa hồng cao (vẫn cần có khả năng click).
+  - `engagement` — ưu tiên câu hỏi/hook tăng tương tác hơn bán trực diện.
+  - `balanced` — cân bằng các yếu tố.
+- **Chỉ gợi ý — chưa tự tạo campaign.** Bạn chỉ **Duyệt / Từ chối**; việc tạo campaign thật vẫn làm thủ công.
+- Muốn gợi ý chính xác hơn: **import báo cáo affiliate có sub_id** (mục 9c). Dữ liệu ít → AI tạo "kế hoạch test".
+
 ## 10. Deploy lên Vercel
 
 Trước khi deploy, chạy `npm run check:env` và `npm run build` để chắc chắn không
