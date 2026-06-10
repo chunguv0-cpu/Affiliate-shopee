@@ -62,7 +62,7 @@ export default async function RecommendationDetailPage({
     return (
       <div>
         <PageHeader title={rec.title || "Đang lập kế hoạch"} description="AI đang xử lý — vui lòng đợi." action={backLink} />
-        <AiPlannerStatusPoller id={rec.id} />
+        <AiPlannerStatusPoller id={rec.id} status={rec.status} createdAt={rec.created_at ?? null} />
       </div>
     );
   }

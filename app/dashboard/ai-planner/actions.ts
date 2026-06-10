@@ -510,6 +510,45 @@ export async function generateWeeklyCampaignRecommendation(
   return { ok: true, id: created.id };
 }
 
+/**
+ * Đánh dấu một job bị treo thành FAILED (chỉ khi đang RUNNING).
+ * Dùng cho nút "Đánh dấu thất bại" trên trang RUNNING.
+ */
+export async function markStuckRecommendationFailed(
+  id: string,
+): Promise<StatusActionResult> {
+  if (!id) return { ok: false, error: "Thiếu mã gợi ý." };
+  try {
+    const supabase = createSupabaseAdminClient();
+    const { error } = await supabase
+      .from("ai_campaign_recommendations")
+      .update({
+        status: "FAILED",
+        error_message: "Manually marked as failed because the job was stuck.",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .eq("status", "RUNNING");
+    if (error) return { ok: false, error: `Cập nhật thất bại: ${error.message}` };
+
+    await insertPostingLog(
+      supabase,
+      null,
+      JOB_FAILED,
+      "FAILED",
+      "Job bị đánh dấu thất bại thủ công (treo quá lâu).",
+      { recommendation_id: id },
+    );
+
+    revalidatePath(`/dashboard/ai-planner/${id}`);
+    revalidatePath("/dashboard/ai-planner");
+    return { ok: true };
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Cập nhật thất bại: ${m}` };
+  }
+}
+
 export type PlannerPrereqs = { canGenerate: boolean; hasReports: boolean };
 
 /** Kiểm tra điều kiện tạo gợi ý: có sản phẩm READY? có dữ liệu báo cáo? */
