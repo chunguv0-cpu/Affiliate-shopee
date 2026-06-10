@@ -156,10 +156,12 @@ export default async function RecommendationDetailPage({
               {gs.main_strategy ? <p><span className="text-gray-400">Chiến lược chính: </span>{gs.main_strategy}</p> : null}
               {gs.why_this_strategy ? <p><span className="text-gray-400">Vì sao: </span>{gs.why_this_strategy}</p> : null}
               {gs.funnel_logic ? <p><span className="text-gray-400">Phễu: </span>{gs.funnel_logic}</p> : null}
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div><p className="text-xs font-semibold uppercase text-green-600">Nên làm</p><Bullets items={gs.do} /></div>
-                <div><p className="text-xs font-semibold uppercase text-red-600">Tránh</p><Bullets items={gs.avoid} /></div>
-              </div>
+              {gs.do.length > 0 || gs.avoid.length > 0 ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {gs.do.length > 0 ? <div><p className="text-xs font-semibold uppercase text-green-600">Nên làm</p><Bullets items={gs.do} /></div> : null}
+                  {gs.avoid.length > 0 ? <div><p className="text-xs font-semibold uppercase text-red-600">Tránh</p><Bullets items={gs.avoid} /></div> : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
           <div className="mt-4 border-t border-gray-100 pt-4">
@@ -253,6 +255,17 @@ export default async function RecommendationDetailPage({
                     </ol>
                     <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                       Các sản phẩm này chưa có link affiliate. Hãy tìm link, gắn sub_id, import vào app rồi mới tạo campaign thật.
+                    </div>
+                  </Section>
+                ) : null}
+
+                {mp.primary_metric || mp.secondary_metrics.length > 0 ? (
+                  <Section title="Kế hoạch đo lường">
+                    <p className="text-sm text-gray-700"><span className="text-gray-400">Chỉ số chính: </span><strong>{mp.primary_metric || "—"}</strong></p>
+                    {mp.success_threshold ? <p className="mt-1 text-sm text-gray-600"><span className="text-gray-400">Ngưỡng đạt: </span>{mp.success_threshold}</p> : null}
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      {mp.secondary_metrics.length > 0 ? <div><p className="text-xs font-semibold uppercase text-gray-400">Chỉ số phụ</p><Bullets items={mp.secondary_metrics} /></div> : null}
+                      {mp.what_to_check_after_7_days.length > 0 ? <div><p className="text-xs font-semibold uppercase text-gray-400">Kiểm tra sau 7 ngày</p><Bullets items={mp.what_to_check_after_7_days} /></div> : null}
                     </div>
                   </Section>
                 ) : null}
