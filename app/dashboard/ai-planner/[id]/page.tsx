@@ -10,6 +10,7 @@ import {
   getResearchSources,
 } from "@/app/dashboard/ai-planner/actions";
 import { normalizeCampaignPlan } from "@/lib/ai/normalize-campaign-plan";
+import { PLANNER_MODE_LABELS, type PlannerMode } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -100,6 +101,12 @@ export default async function RecommendationDetailPage({
   const es = plan.engagement_system;
   const cb = plan.creative_brief;
   const mp = plan.measurement_plan;
+  const pd = plan.product_discovery_strategy;
+  const plannerMode: PlannerMode = (rec.planner_mode as PlannerMode) ?? plan.planner_mode ?? "HYBRID";
+  const hasDiscovery =
+    pd.new_product_opportunities.length > 0 ||
+    pd.recommended_categories.length > 0 ||
+    Boolean(pd.discovery_summary);
 
   return (
     <div>
@@ -109,7 +116,10 @@ export default async function RecommendationDetailPage({
         action={backLink}
       />
 
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap gap-2">
+        <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
+          🧭 Chế độ: {PLANNER_MODE_LABELS[plannerMode]}
+        </span>
         {rec.research_run_id ? (
           <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
             🔍 Có nghiên cứu thị trường · provider: {runMeta?.provider ?? "—"} · {runMeta?.query_count ?? 0} query · {sources.length} nguồn
@@ -159,6 +169,85 @@ export default async function RecommendationDetailPage({
           </Section>
         ) : (
           <>
+            {hasDiscovery ? (
+              <>
+                <Section title="Chiến lược tìm sản phẩm mới">
+                  <div className="mb-3 inline-flex rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-700">
+                    Chế độ: {PLANNER_MODE_LABELS[plannerMode]}
+                  </div>
+                  {pd.discovery_summary ? <p className="text-sm text-gray-700">{pd.discovery_summary}</p> : null}
+                  {pd.recommended_categories.length > 0 ? (
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      {pd.recommended_categories.map((c, i) => (
+                        <div key={i} className="rounded-lg border border-gray-200 p-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-gray-900">{c.category}</span>
+                            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${PRIORITY_STYLE[c.purchase_intent] ?? "bg-gray-100 text-gray-600"}`}>Ý định mua: {c.purchase_intent}</span>
+                            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs text-sky-700">Nội dung: {c.content_potential}</span>
+                          </div>
+                          {c.why_now ? <p className="mt-1 text-sm text-gray-600"><span className="text-gray-400">Vì sao lúc này: </span>{c.why_now}</p> : null}
+                          {c.target_customer ? <p className="mt-0.5 text-xs text-gray-500">Khách: {c.target_customer}</p> : null}
+                          {c.risk ? <p className="mt-0.5 text-xs text-amber-700">Rủi ro: {c.risk}</p> : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </Section>
+
+                {pd.new_product_opportunities.length > 0 ? (
+                  <Section title={`Sản phẩm mới nên tìm link affiliate (${pd.new_product_opportunities.length})`}>
+                    <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Các sản phẩm này <strong>chưa có link affiliate</strong>. Cần tìm và import link trước khi tạo campaign thật.
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                      {pd.new_product_opportunities.map((op, i) => (
+                        <div key={i} className="rounded-lg border border-gray-200 p-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-gray-900">{op.suggested_product}</span>
+                            {op.category ? <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{op.category}</span> : null}
+                            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${PRIORITY_STYLE[op.priority] ?? "bg-gray-100 text-gray-600"}`}>{op.priority}</span>
+                            {op.confidence ? <span className="text-xs text-gray-400">tin cậy: {op.confidence}</span> : null}
+                          </div>
+                          {op.reason ? <p className="mt-1 text-sm text-gray-600">{op.reason}</p> : null}
+                          <dl className="mt-1 space-y-0.5 text-xs text-gray-500">
+                            {op.target_customer ? <div>👤 Khách: {op.target_customer}</div> : null}
+                            {op.pain_point ? <div>❗ Nỗi đau: {op.pain_point}</div> : null}
+                            {op.suggested_price_band ? <div>💰 Khoảng giá: {op.suggested_price_band}</div> : null}
+                            {op.content_angle ? <div>✍️ Góc viết: {op.content_angle}</div> : null}
+                            {op.first_post_hook ? <div className="text-gray-700">🪝 Hook: “{op.first_post_hook}”</div> : null}
+                            {op.cta ? <div>📣 CTA: {op.cta}</div> : null}
+                          </dl>
+                          {op.suggested_search_keywords.length > 0 ? (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {op.suggested_search_keywords.map((k, j) => (
+                                <a key={j} href={`https://shopee.vn/search?keyword=${encodeURIComponent(k)}`} target="_blank" rel="noopener noreferrer" className="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700 hover:underline">🔎 {k}</a>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </Section>
+                ) : null}
+
+                {pd.sourcing_plan.length > 0 ? (
+                  <Section title="Kế hoạch tìm nguồn (sourcing plan)">
+                    <ol className="space-y-2 text-sm text-gray-700">
+                      {pd.sourcing_plan.map((st, i) => (
+                        <li key={i} className="flex gap-3">
+                          <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">{i + 1}</span>
+                          <span><strong>{st.step}</strong>{st.detail ? <span className="text-gray-600"> — {st.detail}</span> : null}</span>
+                        </li>
+                      ))}
+                    </ol>
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Các sản phẩm này chưa có link affiliate. Cần tìm và import link trước khi tạo campaign thật.
+                    </div>
+                  </Section>
+                ) : null}
+              </>
+            ) : null}
+
             <Section title="Chẩn đoán thị trường">
               {md.summary ? <p className="text-sm text-gray-700">{md.summary}</p> : null}
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">

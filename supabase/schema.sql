@@ -215,10 +215,15 @@ create table if not exists ai_campaign_recommendations (
   -- Hotfix 13.2: job state + lỗi
   error_message            text,
   job_input                jsonb,
+  -- Phase 13.3: Product Discovery Mode
+  planner_mode               text default 'HYBRID',
+  product_discovery_strategy jsonb default '{}'::jsonb,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now(),
   constraint ai_campaign_recommendations_status_check
-    check (status in ('DRAFT', 'APPROVED', 'REJECTED', 'CONVERTED_TO_CAMPAIGN', 'RUNNING', 'FAILED'))
+    check (status in ('DRAFT', 'APPROVED', 'REJECTED', 'CONVERTED_TO_CAMPAIGN', 'RUNNING', 'FAILED')),
+  constraint ai_campaign_recommendations_planner_mode_check
+    check (planner_mode in ('HYBRID', 'EXISTING_ONLY', 'DISCOVERY_ONLY'))
 );
 
 create index if not exists idx_ai_recs_status     on ai_campaign_recommendations (status);

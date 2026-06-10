@@ -19,7 +19,11 @@ import {
 } from "@/lib/research/research-summarizer";
 import { getSearchProvider, searchWeb, type SearchResult } from "@/lib/research/search-client";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import type { AICampaignRecommendation, RecommendationStatus } from "@/lib/types";
+import type {
+  AICampaignRecommendation,
+  PlannerMode,
+  RecommendationStatus,
+} from "@/lib/types";
 
 export type GenerateRecResult =
   | { ok: true; id: string }
@@ -49,12 +53,16 @@ export type GenerateRecInput = {
   priority_notes?: string;
   strategy_mode?: StrategyMode;
   detail_level?: DetailLevel;
+  planner_mode?: PlannerMode;
 };
 
 const JOB_STARTED = "AI_PLANNER_JOB_STARTED";
 const JOB_SUCCESS = "AI_PLANNER_JOB_SUCCESS";
 const JOB_FAILED = "AI_PLANNER_JOB_FAILED";
 const QUALITY_ACTION = "AI_PLANNER_QUALITY_WARNING";
+const DISCOVERY_STARTED = "AI_PRODUCT_DISCOVERY_STARTED";
+const DISCOVERY_SUCCESS = "AI_PRODUCT_DISCOVERY_SUCCESS";
+const DISCOVERY_WARNING = "AI_PRODUCT_DISCOVERY_WARNING";
 const APPROVE_ACTION = "APPROVE_AI_CAMPAIGN_PLAN";
 const REJECT_ACTION = "REJECT_AI_CAMPAIGN_PLAN";
 const RESEARCH_ACTION = "RUN_MARKET_RESEARCH";
@@ -76,6 +84,7 @@ export type ResearchInput = {
   goal: CampaignGoal;
   target_customer?: string;
   notes?: string;
+  planner_mode?: PlannerMode;
 };
 
 /**
@@ -112,7 +121,9 @@ export async function runMarketResearchForWeeklyPlan(
     target_customer: string | null;
     product_angle: string | null;
   }[];
-  if (products.length === 0) {
+  const plannerMode: PlannerMode = input.planner_mode ?? "HYBRID";
+  // DISCOVERY_ONLY/HYBRID có thể nghiên cứu mà không cần sản phẩm READY.
+  if (products.length === 0 && plannerMode === "EXISTING_ONLY") {
     return { ok: false, error: "Chưa có sản phẩm READY. Hãy import link affiliate trước." };
   }
 
@@ -142,6 +153,7 @@ export async function runMarketResearchForWeeklyPlan(
       goal,
       target_customer: input.target_customer?.trim() || null,
       notes: input.notes?.trim() || null,
+      planner_mode: plannerMode,
     }).slice(0, maxQueries);
 
     await supabase.from("market_research_runs").update({ queries }).eq("id", runId);
@@ -257,19 +269,26 @@ export async function createRecommendationJob(
       .select("id", { count: "exact", head: true })
       .eq("status", "ACTIVE")
       .eq("link_status", "READY");
-    if (!count || count === 0) {
-      return { ok: false, error: "Chưa có sản phẩm READY. Hãy import link affiliate trước." };
-    }
+    const readyCount = count ?? 0;
+
+    // Phase 13.3 — chọn chế độ. Không có sản phẩm READY => tự chuyển DISCOVERY_ONLY.
+    let plannerMode: PlannerMode = input.planner_mode ?? "HYBRID";
+    if (readyCount === 0) plannerMode = "DISCOVERY_ONLY";
+    // EXISTING_ONLY mà không có sản phẩm READY thì vô nghĩa => đã ép DISCOVERY_ONLY ở trên.
 
     const { data: inserted, error } = await supabase
       .from("ai_campaign_recommendations")
       .insert({
-        title: `Đang lập kế hoạch — ${weekStart} → ${weekEnd}`,
+        title:
+          plannerMode === "DISCOVERY_ONLY"
+            ? `Đang tìm sản phẩm — ${weekStart} → ${weekEnd}`
+            : `Đang lập kế hoạch — ${weekStart} → ${weekEnd}`,
         goal,
         week_start: weekStart,
         week_end: weekEnd,
         status: "RUNNING",
-        job_input: { ...input, goal },
+        planner_mode: plannerMode,
+        job_input: { ...input, goal, planner_mode: plannerMode },
       })
       .select("id")
       .single();
@@ -283,9 +302,19 @@ export async function createRecommendationJob(
       null,
       JOB_STARTED,
       "SUCCESS",
-      `Bắt đầu lập kế hoạch chiến lược (mục tiêu: ${goal}).`,
+      `Bắt đầu lập kế hoạch (mục tiêu: ${goal}, chế độ: ${plannerMode}).`,
       { recommendation_id: inserted.id },
     );
+    if (plannerMode !== "EXISTING_ONLY") {
+      await insertPostingLog(
+        supabase,
+        null,
+        DISCOVERY_STARTED,
+        "SUCCESS",
+        `Bắt đầu khám phá sản phẩm mới (chế độ: ${plannerMode}).`,
+        { recommendation_id: inserted.id },
+      );
+    }
 
     revalidatePath("/dashboard/ai-planner");
     return { ok: true, id: inserted.id as string };
@@ -320,6 +349,7 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
 
   const input = (rec.job_input ?? {}) as GenerateRecInput;
   const goal = computeGoal(input);
+  const plannerMode: PlannerMode = input.planner_mode ?? "HYBRID";
   const weekStart = (input.week_start ?? "").trim();
   const weekEnd = (input.week_end ?? "").trim();
 
@@ -335,7 +365,8 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
       sub_id: string | null;
       affiliate_link: string | null;
     }[];
-    if (products.length === 0) {
+    // Chỉ EXISTING_ONLY mới bắt buộc có sản phẩm READY.
+    if (products.length === 0 && plannerMode === "EXISTING_ONLY") {
       throw new Error("Không còn sản phẩm READY.");
     }
 
@@ -397,7 +428,9 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
     let research: MarketResearchInsights | null = null;
     let researchRunId: string | null = null;
     if (input.use_market_research) {
-      const maxQueries = input.detail_level === "very_detailed" ? 8 : DEFAULT_RESEARCH_MAX_QUERIES;
+      // Phase 13.3 — giữ limit an toàn: detailed/very_detailed = 6 query, còn lại 4; 2 kết quả/query.
+      const detailed = input.detail_level === "detailed" || input.detail_level === "very_detailed";
+      const maxQueries = detailed ? 6 : 4;
       const rr = await runMarketResearchForWeeklyPlan(
         {
           week_start: weekStart,
@@ -405,8 +438,9 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
           goal,
           target_customer: input.target_customer,
           notes: input.notes,
+          planner_mode: plannerMode,
         },
-        { maxQueries, maxResults: DEFAULT_RESEARCH_MAX_RESULTS_PER_QUERY },
+        { maxQueries, maxResults: 2 },
       );
       if (rr.ok) {
         const { data: runRow } = await supabase
@@ -430,13 +464,14 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
       priority_notes: input.priority_notes?.trim() || null,
       strategy_mode: input.strategy_mode ?? null,
       detail_level: input.detail_level ?? "very_detailed",
+      planner_mode: plannerMode,
       products: plannerProducts,
       summary,
       research,
     });
 
     const plan = normalizeCampaignPlan(rawPlan);
-    const qualityWarnings = validateCampaignPlanQuality(plan, goal);
+    const qualityWarnings = validateCampaignPlanQuality(plan, goal, plannerMode);
 
     const { error: updErr } = await supabase
       .from("ai_campaign_recommendations")
@@ -462,6 +497,8 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
         risks: plan.risks_and_controls,
         next_actions: plan.next_actions,
         quality_warnings: qualityWarnings,
+        planner_mode: plannerMode,
+        product_discovery_strategy: plan.product_discovery_strategy,
         error_message: null,
         updated_at: new Date().toISOString(),
       })
@@ -469,9 +506,20 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
 
     if (updErr) throw new Error(updErr.message);
 
-    await insertPostingLog(supabase, null, JOB_SUCCESS, "SUCCESS", `Đã lập kế hoạch (mục tiêu: ${goal}).`, {
+    const oppCount = plan.product_discovery_strategy.new_product_opportunities.length;
+    await insertPostingLog(supabase, null, JOB_SUCCESS, "SUCCESS", `Đã lập kế hoạch (mục tiêu: ${goal}, chế độ: ${plannerMode}).`, {
       recommendation_id: id,
     });
+    if (plannerMode !== "EXISTING_ONLY") {
+      await insertPostingLog(
+        supabase,
+        null,
+        DISCOVERY_SUCCESS,
+        "SUCCESS",
+        `Khám phá ${oppCount} sản phẩm mới nên tìm link (chế độ: ${plannerMode}).`,
+        { recommendation_id: id },
+      );
+    }
     if (qualityWarnings.length > 0) {
       await insertPostingLog(
         supabase,
@@ -481,6 +529,18 @@ export async function runRecommendationJob(id: string): Promise<RunJobResult> {
         `Kế hoạch còn thiếu chiều sâu: ${qualityWarnings.join("; ")}`.slice(0, 5000),
         { recommendation_id: id },
       );
+      // Cảnh báo riêng cho phần khám phá sản phẩm.
+      const discoveryWarn = qualityWarnings.filter((x) => /sản phẩm mới|sourcing|DISCOVERY|HYBRID|từ khóa/i.test(x));
+      if (discoveryWarn.length > 0) {
+        await insertPostingLog(
+          supabase,
+          null,
+          DISCOVERY_WARNING,
+          "FAILED",
+          `Khám phá sản phẩm cần kiểm tra: ${discoveryWarn.join("; ")}`.slice(0, 2000),
+          { recommendation_id: id },
+        );
+      }
     }
 
     revalidatePath(`/dashboard/ai-planner/${id}`);

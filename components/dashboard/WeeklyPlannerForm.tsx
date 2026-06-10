@@ -5,6 +5,7 @@ import { useState, useTransition, type FormEvent } from "react";
 
 import { createRecommendationJob } from "@/app/dashboard/ai-planner/actions";
 import type { CampaignGoal } from "@/lib/ai/campaign-planner";
+import { PLANNER_MODE_LABELS, type PlannerMode } from "@/lib/types";
 
 const inputClass =
   "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500";
@@ -29,18 +30,16 @@ export default function WeeklyPlannerForm({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  if (!canGenerate) {
-    return (
-      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-        Chưa có sản phẩm READY. Hãy <strong>import link affiliate</strong> trước khi tạo gợi ý.
-      </div>
-    );
-  }
+  // Không có sản phẩm READY => khóa chế độ DISCOVERY_ONLY (vẫn lập kế hoạch được).
+  const forcedDiscovery = !canGenerate;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     const fd = new FormData(event.currentTarget);
+    const plannerMode = (forcedDiscovery
+      ? "DISCOVERY_ONLY"
+      : (String(fd.get("planner_mode") ?? "HYBRID"))) as PlannerMode;
     const input = {
       week_start: String(fd.get("week_start") ?? ""),
       week_end: String(fd.get("week_end") ?? ""),
@@ -48,6 +47,7 @@ export default function WeeklyPlannerForm({
       target_customer: String(fd.get("target_customer") ?? ""),
       notes: String(fd.get("notes") ?? ""),
       priority_notes: String(fd.get("priority_notes") ?? ""),
+      planner_mode: plannerMode,
       detail_level: String(fd.get("detail_level") ?? "very_detailed") as
         | "quick"
         | "detailed"
@@ -80,6 +80,31 @@ export default function WeeklyPlannerForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {forcedDiscovery ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Chưa có sản phẩm READY. AI sẽ <strong>nghiên cứu thị trường</strong> và đề xuất{" "}
+          <strong>sản phẩm nên tìm link affiliate</strong>. (Chế độ: Tìm sản phẩm mới hoàn toàn)
+        </div>
+      ) : null}
+
+      <div>
+        <label className={labelClass} htmlFor="planner_mode">Chế độ lập kế hoạch</label>
+        <select
+          id="planner_mode"
+          name="planner_mode"
+          defaultValue={forcedDiscovery ? "DISCOVERY_ONLY" : "HYBRID"}
+          disabled={forcedDiscovery}
+          className={inputClass}
+        >
+          {(Object.keys(PLANNER_MODE_LABELS) as PlannerMode[]).map((m) => (
+            <option key={m} value={m}>{PLANNER_MODE_LABELS[m]}</option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-gray-500">
+          HYBRID: tối ưu sản phẩm có sẵn + gợi ý sản phẩm mới. DISCOVERY_ONLY: chỉ tìm sản phẩm mới từ research.
+        </p>
+      </div>
+
       {!hasReports ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           Chưa có <strong>dữ liệu báo cáo affiliate</strong> (click/đơn). AI vẫn lập kế

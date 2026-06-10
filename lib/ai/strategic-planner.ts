@@ -12,6 +12,7 @@ import type {
   PlannerSummary,
 } from "@/lib/ai/campaign-planner";
 import type { MarketResearchInsights } from "@/lib/research/research-summarizer";
+import type { PlannerMode } from "@/lib/types";
 
 export type StrategyMode =
   | "safe_test"
@@ -96,9 +97,42 @@ export type MeasurementPlan = {
   what_to_check_after_7_days: string[];
 };
 
+// Phase 13.3 — Product Discovery Mode.
+export type DiscoveryCategory = {
+  category: string;
+  why_now: string;
+  target_customer: string;
+  purchase_intent: string; // HIGH | MEDIUM | LOW
+  content_potential: string; // HIGH | MEDIUM | LOW
+  risk: string;
+};
+export type NewProductOpportunity = {
+  suggested_product: string;
+  category: string;
+  reason: string;
+  target_customer: string;
+  pain_point: string;
+  suggested_price_band: string; // thấp / trung bình / cao
+  suggested_search_keywords: string[];
+  content_angle: string;
+  first_post_hook: string;
+  cta: string;
+  priority: string; // HIGH | MEDIUM | LOW
+  confidence: string; // HIGH | MEDIUM | LOW
+};
+export type SourcingStep = { step: string; detail: string };
+export type ProductDiscoveryStrategy = {
+  discovery_summary: string;
+  recommended_categories: DiscoveryCategory[];
+  new_product_opportunities: NewProductOpportunity[];
+  sourcing_plan: SourcingStep[];
+};
+
 export type StrategicPlan = {
   title: string;
   goal: string;
+  planner_mode: PlannerMode;
+  product_discovery_strategy: ProductDiscoveryStrategy;
   executive_summary: string;
   market_diagnosis: MarketDiagnosis;
   internal_data_diagnosis: InternalDataDiagnosis;
@@ -122,6 +156,7 @@ export type StrategicPlanInput = {
   priority_notes?: string | null;
   strategy_mode?: StrategyMode | null;
   detail_level?: DetailLevel | null;
+  planner_mode?: PlannerMode | null;
   products: PlannerProduct[];
   summary: PlannerSummary;
   research?: MarketResearchInsights | null;
@@ -149,9 +184,17 @@ RULE CỨNG:
 - products_to_source: sản phẩm CHƯA có trong kho, để người dùng tự tìm link (kèm từ khóa search), không bịa link.
 - weekly_execution_plan: tối đa 7 ngày, mỗi ngày 2-4 bài.
 
+CHẾ ĐỘ LẬP KẾ HOẠCH (planner_mode) — TUÂN THỦ NGHIÊM:
+- EXISTING_ONLY: chỉ dùng sản phẩm đã import (READY). product_discovery_strategy.new_product_opportunities có thể rỗng/ít.
+- HYBRID: vừa tối ưu sản phẩm có sẵn, vừa đề xuất sản phẩm mới. new_product_opportunities phải có ÍT NHẤT 5 sản phẩm mới (khi có research). Ít nhất 40% đề xuất là sản phẩm mới.
+- DISCOVERY_ONLY: BỎ QUA bảng sản phẩm có sẵn khi chọn sản phẩm. Xây chiến lược từ research + tệp khách + mục tiêu + xu hướng mua sắm/nội dung. new_product_opportunities phải có ÍT NHẤT 10 sản phẩm mới, đa dạng nhóm hàng. weekly_execution_plan KHÔNG phải lịch đăng sản phẩm thật mà là kế hoạch TÌM LINK + TEST nội dung (VD: Ngày 1 tìm link nhóm A, Ngày 2 import + test, Ngày 3 tạo campaign sau khi có link). KHÔNG giả vờ đã có lịch đăng sản phẩm thật.
+- Sản phẩm mới đề xuất KHÔNG trùng lặp sản phẩm đã có; phải đa dạng nhóm hàng; mỗi sản phẩm phải có suggested_search_keywords để người dùng tìm link trên Shopee.
+- Nói rõ: các sản phẩm mới này CẦN tìm + import link affiliate trước khi tạo campaign thật.
+
 CHỈ trả về JSON đúng schema (không thêm text ngoài JSON):
 {
-"title":"","goal":"","executive_summary":"",
+"title":"","goal":"","planner_mode":"HYBRID|EXISTING_ONLY|DISCOVERY_ONLY","executive_summary":"",
+"product_discovery_strategy":{"discovery_summary":"","recommended_categories":[{"category":"","why_now":"","target_customer":"","purchase_intent":"HIGH|MEDIUM|LOW","content_potential":"HIGH|MEDIUM|LOW","risk":""}],"new_product_opportunities":[{"suggested_product":"","category":"","reason":"","target_customer":"","pain_point":"","suggested_price_band":"thấp|trung bình|cao","suggested_search_keywords":[""],"content_angle":"","first_post_hook":"","cta":"","priority":"HIGH|MEDIUM|LOW","confidence":"HIGH|MEDIUM|LOW"}],"sourcing_plan":[{"step":"","detail":""}]},
 "market_diagnosis":{"summary":"","customer_pain_points":[""],"purchase_triggers":[""],"content_patterns":[""],"source_based_insights":[{"insight":"","evidence":"","confidence":"HIGH|MEDIUM|LOW"}]},
 "internal_data_diagnosis":{"data_quality":"ENOUGH|LIMITED|TEST_ONLY","summary":"","what_we_know":[""],"what_we_do_not_know":[""],"testing_assumption":[""]},
 "goal_strategy":{"main_strategy":"","why_this_strategy":"","funnel_logic":"","do":[""],"avoid":[""]},
@@ -177,6 +220,12 @@ function buildUserPrompt(input: StrategicPlanInput): string {
   const r = input.research;
   return [
     `MỤC TIÊU: ${GOAL_LABELS[input.goal]} (${input.goal})`,
+    `CHẾ ĐỘ LẬP KẾ HOẠCH (planner_mode): ${input.planner_mode ?? "HYBRID"}`,
+    input.planner_mode === "DISCOVERY_ONLY"
+      ? "=> DISCOVERY_ONLY: bỏ qua sản phẩm có sẵn khi chọn SP; bắt buộc >=10 sản phẩm mới đa dạng nhóm; weekly_execution_plan là kế hoạch tìm link + test."
+      : input.planner_mode === "EXISTING_ONLY"
+        ? "=> EXISTING_ONLY: chỉ tối ưu sản phẩm READY có sẵn."
+        : "=> HYBRID: kết hợp sản phẩm có sẵn + bắt buộc >=5 sản phẩm mới nên tìm link.",
     `Chế độ chiến lược: ${input.strategy_mode ?? "(mặc định theo goal)"}`,
     `Mức độ chi tiết: ${input.detail_level ?? "very_detailed"}`,
     `Tuần: ${input.week_start} -> ${input.week_end}`,
@@ -217,11 +266,97 @@ function arr(v: unknown): Record<string, unknown>[] {
   return Array.isArray(v) ? v.map((x) => obj(x)) : [];
 }
 
+// Nguồn ý tưởng sản phẩm đa dạng (an toàn, KHÔNG bịa giá cụ thể) cho mock discovery.
+const DISCOVERY_SEED: Array<{
+  product: string;
+  category: string;
+  customer: string;
+  pain: string;
+  band: string;
+  keywords: string[];
+  angle: string;
+}> = [
+  { product: "Khăn lau bếp đa năng", category: "Đồ gia dụng", customer: "Nội trợ, mẹ bỉm", pain: "Lau dọn bếp mất thời gian", band: "thấp", keywords: ["khăn lau bếp đa năng", "khăn lau đa năng giá tốt"], angle: "Mẹo dọn bếp nhanh" },
+  { product: "Hộp đựng thực phẩm chia ngăn", category: "Đồ gia dụng", customer: "Dân văn phòng", pain: "Bảo quản đồ ăn lộn xộn", band: "thấp", keywords: ["hộp đựng thực phẩm chia ngăn", "hộp cơm văn phòng"], angle: "Chuẩn bị cơm trưa tiện lợi" },
+  { product: "Đèn ngủ cảm biến chuyển động", category: "Đồ gia dụng thông minh", customer: "Gia đình có trẻ nhỏ", pain: "Dậy đêm tối nguy hiểm", band: "trung bình", keywords: ["đèn ngủ cảm biến", "đèn cảm ứng dán tường"], angle: "Tiện ích nhỏ thay đổi sinh hoạt" },
+  { product: "Máy xay cầm tay mini", category: "Nhà bếp", customer: "Mẹ bỉm, người nấu ăn", pain: "Làm đồ ăn dặm/sinh tố tốn công", band: "trung bình", keywords: ["máy xay cầm tay mini", "máy xay ăn dặm"], angle: "Tiết kiệm thời gian nấu nướng" },
+  { product: "Túi hút chân không quần áo", category: "Lưu trữ", customer: "Người ở trọ, gia đình nhỏ", pain: "Tủ quần áo chật chội", band: "thấp", keywords: ["túi hút chân không quần áo", "túi nén quần áo"], angle: "Sắp xếp tủ gọn gàng" },
+  { product: "Giá kệ dán tường nhà tắm", category: "Nhà tắm", customer: "Người thuê trọ", pain: "Nhà tắm bừa bộn, không khoan tường", band: "thấp", keywords: ["kệ dán tường nhà tắm", "kệ nhà tắm không khoan"], angle: "Nâng cấp nhà tắm không khoan đục" },
+  { product: "Bình giữ nhiệt cá nhân", category: "Đồ dùng cá nhân", customer: "Dân văn phòng, học sinh", pain: "Nước nguội nhanh khi mang đi", band: "trung bình", keywords: ["bình giữ nhiệt", "bình giữ nhiệt văn phòng"], angle: "Thói quen uống đủ nước" },
+  { product: "Bộ dụng cụ vệ sinh khe hẹp", category: "Dọn dẹp", customer: "Nội trợ", pain: "Khe cửa, bàn phím bám bụi", band: "thấp", keywords: ["dụng cụ vệ sinh khe hẹp", "chổi mini làm sạch"], angle: "Mẹo dọn nhà sạch từng góc" },
+  { product: "Đồ chơi phát triển giác quan cho bé", category: "Mẹ và bé", customer: "Mẹ bỉm", pain: "Tìm đồ chơi an toàn cho bé", band: "trung bình", keywords: ["đồ chơi phát triển giác quan", "đồ chơi cho bé an toàn"], angle: "Chọn đồ chơi an toàn cho con" },
+  { product: "Gối chống trào ngược cho bé", category: "Mẹ và bé", customer: "Mẹ có con sơ sinh", pain: "Bé trớ sữa, ngủ không ngon", band: "trung bình", keywords: ["gối chống trào ngược", "gối cho bé sơ sinh"], angle: "Chăm bé ngủ ngon" },
+  { product: "Móc treo đồ đa năng sau cửa", category: "Lưu trữ", customer: "Người ở trọ", pain: "Thiếu chỗ treo đồ", band: "thấp", keywords: ["móc treo sau cửa", "móc treo đa năng"], angle: "Tận dụng không gian nhỏ" },
+  { product: "Thảm lau chân thấm hút nhanh", category: "Đồ gia dụng", customer: "Gia đình", pain: "Sàn ướt trơn trượt", band: "thấp", keywords: ["thảm lau chân thấm hút", "thảm chùi chân nhà tắm"], angle: "An toàn cho cả nhà" },
+];
+
+function buildDiscoveryStrategy(input: StrategicPlanInput): ProductDiscoveryStrategy {
+  const mode: PlannerMode = input.planner_mode ?? "HYBRID";
+  const minItems = mode === "DISCOVERY_ONLY" ? 10 : mode === "HYBRID" ? 5 : 0;
+  const orders = input.goal === "orders";
+  const cta = orders ? "Kiểm tra deal & chốt nhanh kẻo hết." : "Bấm xem & lưu lại canh mã giảm.";
+
+  const fromResearch = (input.research?.recommended_product_groups ?? []).map((g) => ({
+    product: g.group,
+    category: g.group,
+    customer: input.target_customer ?? "người mua sắm online",
+    pain: g.reason || "Nhu cầu phổ biến theo research.",
+    band: "trung bình",
+    keywords: [g.group, `${g.group} giá tốt shopee`],
+    angle: "Review thật / gom deal",
+  }));
+
+  const pool = [...fromResearch, ...DISCOVERY_SEED];
+  const picked = pool.slice(0, Math.max(minItems, mode === "EXISTING_ONLY" ? 0 : 6));
+
+  const new_product_opportunities: NewProductOpportunity[] = picked.map((p, i) => ({
+    suggested_product: p.product,
+    category: p.category,
+    reason: p.pain,
+    target_customer: p.customer,
+    pain_point: p.pain,
+    suggested_price_band: p.band,
+    suggested_search_keywords: p.keywords,
+    content_angle: p.angle,
+    first_post_hook: `${p.product} — món nhỏ nhưng giải quyết đúng nỗi đau "${p.pain}".`,
+    cta,
+    priority: i < 3 ? "HIGH" : i < 7 ? "MEDIUM" : "LOW",
+    confidence: input.research ? "MEDIUM" : "LOW",
+  }));
+
+  const cats = new Map<string, NewProductOpportunity[]>();
+  for (const o of new_product_opportunities) {
+    cats.set(o.category, [...(cats.get(o.category) ?? []), o]);
+  }
+  const recommended_categories: DiscoveryCategory[] = Array.from(cats.keys()).slice(0, 6).map((c) => ({
+    category: c,
+    why_now: "Nhu cầu thực tế, dễ tạo nội dung, phù hợp mục tiêu tuần.",
+    target_customer: input.target_customer ?? "người mua sắm online",
+    purchase_intent: orders ? "HIGH" : "MEDIUM",
+    content_potential: "MEDIUM",
+    risk: "Cần kiểm tra giá/tồn kho thực tế khi tìm link.",
+  }));
+
+  return {
+    discovery_summary: `Dựa trên ${input.research ? "nghiên cứu thị trường" : "hiểu biết chung"} và mục tiêu ${GOAL_LABELS[input.goal]}, đây là các nhóm sản phẩm và sản phẩm cụ thể nên tìm link affiliate. Các sản phẩm này CHƯA có link — cần tìm + import trước khi tạo campaign thật.`,
+    recommended_categories,
+    new_product_opportunities,
+    sourcing_plan: [
+      { step: "Tìm link trên Shopee", detail: "Dùng từ khóa gợi ý, ưu tiên sản phẩm đánh giá tốt, giá hợp lý." },
+      { step: "Chuyển link affiliate + sub_id", detail: "Tạo link tiếp thị liên kết, gắn sub_id để đo lường." },
+      { step: "Import vào app", detail: "Dán link vào mục Import link affiliate để AI enrich thông tin." },
+      { step: "Tạo campaign", detail: "Sau khi sản phẩm READY, tạo campaign/kế hoạch đăng thật." },
+    ],
+  };
+}
+
 function mockPlan(input: StrategicPlanInput): StrategicPlan {
   const top = input.products.slice(0, 5);
   const limited = !input.summary.has_report_data;
   const goalLabel = GOAL_LABELS[input.goal];
   const orders = input.goal === "orders";
+  const mode: PlannerMode = input.planner_mode ?? "HYBRID";
+  const discovery = buildDiscoveryStrategy(input);
 
   const decisions: ProductDecision[] = top.map((p, i) => ({
     product_id: p.product_id,
@@ -238,9 +373,20 @@ function mockPlan(input: StrategicPlanInput): StrategicPlan {
     confidence: limited ? "LOW" : "MEDIUM",
   }));
 
+  const discoveryWeekly: ExecDay[] = [
+    { day: "Ngày 1", theme: "Tìm link nhóm sản phẩm ưu tiên", posts: [] },
+    { day: "Ngày 2", theme: "Import link + test nội dung nháp", posts: [] },
+    { day: "Ngày 3", theme: "Tạo campaign sau khi sản phẩm READY", posts: [] },
+  ];
+
   return {
-    title: `Kế hoạch tuần — ${goalLabel}${orders ? " (ưu tiên chuyển đổi)" : ""}`,
+    title:
+      mode === "DISCOVERY_ONLY"
+        ? `Kế hoạch tìm sản phẩm — ${goalLabel}`
+        : `Kế hoạch tuần — ${goalLabel}${orders ? " (ưu tiên chuyển đổi)" : ""}`,
     goal: goalLabel,
+    planner_mode: mode,
+    product_discovery_strategy: discovery,
     executive_summary: limited
       ? "Dữ liệu nội bộ còn ít, chiến lược tuần này ưu tiên test có kiểm soát: chọn 2-3 sản phẩm nhu cầu rõ để xác nhận tín hiệu mua, kết hợp research thị trường để chọn góc viết và khung giờ. Mục tiêu là thu dữ liệu chuyển đổi đáng tin trước khi mở rộng."
       : "Chiến lược tuần tập trung vào nhóm sản phẩm có tín hiệu tốt gần đây, phối góc viết theo mục tiêu, và lịch đăng phục vụ đúng phễu.",
@@ -281,7 +427,7 @@ function mockPlan(input: StrategicPlanInput): StrategicPlan {
         : ["Phối nhiều góc viết", "Bám nhu cầu thực tế"],
       avoid: orders ? ["Bài chỉ gây tò mò không có ý định mua", "Sản phẩm giá cao chưa warming"] : ["Spam một sản phẩm"],
     },
-    product_decision_table: decisions,
+    product_decision_table: mode === "DISCOVERY_ONLY" ? [] : decisions,
     products_to_source: (input.research?.recommended_product_groups ?? []).slice(0, 3).map((g) => ({
       suggested_product: g.group,
       reason: g.reason || "Nhóm tiềm năng theo research.",
@@ -290,7 +436,7 @@ function mockPlan(input: StrategicPlanInput): StrategicPlan {
       content_angle: "Review thật / gom deal",
       priority: "MEDIUM",
     })),
-    weekly_execution_plan: ["Thứ 2", "Thứ 4", "Thứ 6", "Chủ nhật"].map((day, di) => ({
+    weekly_execution_plan: mode === "DISCOVERY_ONLY" ? discoveryWeekly : ["Thứ 2", "Thứ 4", "Thứ 6", "Chủ nhật"].map((day, di) => ({
       day,
       theme: orders ? "Đẩy nhu cầu & chốt deal" : "Kéo chú ý & nuôi tương tác",
       posts: top.slice(0, 2).map((p, pi) => ({
@@ -355,10 +501,50 @@ function parsePlan(raw: string, input: StrategicPlanInput): StrategicPlan {
   const es = obj(o.engagement_system);
   const cb = obj(o.creative_brief);
   const mp = obj(o.measurement_plan);
+  const pds = obj(o.product_discovery_strategy);
+
+  const mode: PlannerMode =
+    o.planner_mode === "EXISTING_ONLY" || o.planner_mode === "DISCOVERY_ONLY"
+      ? o.planner_mode
+      : input.planner_mode ?? "HYBRID";
+
+  const parsedOpportunities: NewProductOpportunity[] = arr(pds.new_product_opportunities).map((x) => ({
+    suggested_product: s(x.suggested_product),
+    category: s(x.category),
+    reason: s(x.reason),
+    target_customer: s(x.target_customer),
+    pain_point: s(x.pain_point),
+    suggested_price_band: s(x.suggested_price_band),
+    suggested_search_keywords: sa(x.suggested_search_keywords),
+    content_angle: s(x.content_angle),
+    first_post_hook: s(x.first_post_hook),
+    cta: s(x.cta),
+    priority: s(x.priority, "MEDIUM"),
+    confidence: s(x.confidence, "MEDIUM"),
+  })).filter((x) => x.suggested_product);
 
   return {
     title: s(o.title, fb.title),
     goal: s(o.goal, fb.goal),
+    planner_mode: mode,
+    product_discovery_strategy: {
+      discovery_summary: s(pds.discovery_summary, fb.product_discovery_strategy.discovery_summary),
+      recommended_categories: arr(pds.recommended_categories).map((x) => ({
+        category: s(x.category),
+        why_now: s(x.why_now),
+        target_customer: s(x.target_customer),
+        purchase_intent: s(x.purchase_intent, "MEDIUM"),
+        content_potential: s(x.content_potential, "MEDIUM"),
+        risk: s(x.risk),
+      })).filter((x) => x.category),
+      // Nếu AI trả thiếu (ví dụ rỗng) thì dùng fallback mock để đạt yêu cầu tối thiểu.
+      new_product_opportunities:
+        parsedOpportunities.length > 0 ? parsedOpportunities : fb.product_discovery_strategy.new_product_opportunities,
+      sourcing_plan: (() => {
+        const sp = arr(pds.sourcing_plan).map((x) => ({ step: s(x.step), detail: s(x.detail) })).filter((x) => x.step);
+        return sp.length > 0 ? sp : fb.product_discovery_strategy.sourcing_plan;
+      })(),
+    },
     executive_summary: s(o.executive_summary, fb.executive_summary),
     market_diagnosis: {
       summary: s(md.summary),

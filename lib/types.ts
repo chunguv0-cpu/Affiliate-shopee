@@ -156,6 +156,15 @@ export const RECOMMENDATION_STATUS_LABELS: Record<RecommendationStatus, string> 
   FAILED: "Thất bại",
 };
 
+/** Phase 13.3 — chế độ lập kế hoạch. */
+export type PlannerMode = "HYBRID" | "EXISTING_ONLY" | "DISCOVERY_ONLY";
+
+export const PLANNER_MODE_LABELS: Record<PlannerMode, string> = {
+  HYBRID: "Sản phẩm có sẵn + tìm thêm sản phẩm mới",
+  EXISTING_ONLY: "Chỉ tối ưu sản phẩm có sẵn",
+  DISCOVERY_ONLY: "Tìm sản phẩm mới hoàn toàn",
+};
+
 /** Một bản ghi gợi ý chiến dịch tuần do AI tạo (Phase 13). */
 export type AICampaignRecommendation = {
   id: string;
@@ -193,6 +202,8 @@ export type AICampaignRecommendation = {
   quality_warnings?: unknown;
   error_message?: string | null;
   job_input?: unknown;
+  planner_mode?: PlannerMode | null;
+  product_discovery_strategy?: unknown;
   created_at: string;
   updated_at: string;
 };

@@ -1,4 +1,5 @@
 import type { StrategicPlan } from "@/lib/ai/strategic-planner";
+import type { PlannerMode } from "@/lib/types";
 
 /**
  * Chuẩn hóa AN TOÀN một plan (từ AI hoặc từ DB) về đầy đủ field.
@@ -28,10 +29,46 @@ export function normalizeCampaignPlan(input: unknown): StrategicPlan {
   const es = o(p.engagement_system);
   const cb = o(p.creative_brief);
   const mp = o(p.measurement_plan);
+  const pds = o(p.product_discovery_strategy);
+
+  const mode: PlannerMode =
+    p.planner_mode === "EXISTING_ONLY" || p.planner_mode === "DISCOVERY_ONLY"
+      ? (p.planner_mode as PlannerMode)
+      : "HYBRID";
 
   return {
     title: s(p.title, "Kế hoạch chiến dịch"),
     goal: s(p.goal, ""),
+    planner_mode: mode,
+    product_discovery_strategy: {
+      discovery_summary: s(pds.discovery_summary),
+      recommended_categories: aArr(pds.recommended_categories).map((x) => ({
+        category: s(x.category),
+        why_now: s(x.why_now),
+        target_customer: s(x.target_customer),
+        purchase_intent: s(x.purchase_intent, "MEDIUM"),
+        content_potential: s(x.content_potential, "MEDIUM"),
+        risk: s(x.risk),
+      })),
+      new_product_opportunities: aArr(pds.new_product_opportunities).map((x) => ({
+        suggested_product: s(x.suggested_product),
+        category: s(x.category),
+        reason: s(x.reason),
+        target_customer: s(x.target_customer),
+        pain_point: s(x.pain_point),
+        suggested_price_band: s(x.suggested_price_band),
+        suggested_search_keywords: sArr(x.suggested_search_keywords),
+        content_angle: s(x.content_angle),
+        first_post_hook: s(x.first_post_hook),
+        cta: s(x.cta),
+        priority: s(x.priority, "MEDIUM"),
+        confidence: s(x.confidence, "MEDIUM"),
+      })),
+      sourcing_plan: aArr(pds.sourcing_plan).map((x) => ({
+        step: s(x.step),
+        detail: s(x.detail),
+      })),
+    },
     executive_summary: s(p.executive_summary, ""),
     market_diagnosis: {
       summary: s(md.summary),
