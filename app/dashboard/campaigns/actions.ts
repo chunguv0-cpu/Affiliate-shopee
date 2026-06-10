@@ -155,9 +155,21 @@ export async function createCampaignAndSchedulePosts(
     if (productsError) {
       return { ok: false, error: `Không tải được sản phẩm: ${productsError.message}` };
     }
-    const products = (productsData ?? []) as Product[];
-    if (products.length === 0) {
+    const allSelected = (productsData ?? []) as Product[];
+    if (allSelected.length === 0) {
       return { ok: false, error: "Không tìm thấy sản phẩm đã chọn." };
+    }
+
+    // Phase 11: chỉ dùng sản phẩm có link affiliate hợp lệ (link_status = READY).
+    const products = allSelected.filter(
+      (p) => p.link_status === "READY" && !!p.affiliate_link,
+    );
+    if (products.length === 0) {
+      return {
+        ok: false,
+        error:
+          "Sản phẩm chưa có link Affiliate hợp lệ. Vui lòng chuyển link trước khi tạo bài.",
+      };
     }
 
     // 3) Dựng slot, rồi phân công (sản phẩm + góc viết) cho từng slot.
@@ -230,7 +242,7 @@ export async function createCampaignAndSchedulePosts(
       const input: ProductInput = {
         id: product.id,
         product_name: product.product_name,
-        affiliate_link: product.affiliate_link,
+        affiliate_link: product.affiliate_link ?? "",
         price_note: product.price_note,
         target_customer: product.target_customer,
         product_angle: product.product_angle,

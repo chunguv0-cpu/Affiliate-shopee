@@ -70,16 +70,61 @@ export default function ProductForm({ mode, product, onDone }: ProductFormProps)
         </div>
 
         <div className="sm:col-span-2">
+          <label className={labelClass} htmlFor="original_url">
+            Link gốc Shopee (original_url)
+          </label>
+          <input
+            id="original_url"
+            name="original_url"
+            type="url"
+            defaultValue={product?.original_url ?? ""}
+            placeholder="https://shopee.vn/..."
+            className={inputClass}
+          />
+        </div>
+
+        <div className="sm:col-span-2">
           <label className={labelClass} htmlFor="affiliate_link">
-            Link affiliate <span className="text-red-500">*</span>
+            Link affiliate (s.shopee.vn / shope.ee)
           </label>
           <input
             id="affiliate_link"
             name="affiliate_link"
             type="url"
-            required
             defaultValue={product?.affiliate_link ?? ""}
-            placeholder="https://shopee.vn/..."
+            placeholder="https://s.shopee.vn/..."
+            className={inputClass}
+          />
+          <p className="mt-1 text-xs text-gray-400">
+            Cần Link gốc HOẶC Link affiliate. Trạng thái link tự xác định theo link
+            affiliate (s.shopee.vn / shope.ee = Sẵn sàng).
+          </p>
+        </div>
+
+        <div>
+          <label className={labelClass} htmlFor="sub_id">
+            Sub ID (để trống sẽ tự sinh)
+          </label>
+          <input
+            id="sub_id"
+            name="sub_id"
+            type="text"
+            defaultValue={product?.sub_id ?? ""}
+            placeholder="fb_page_ten-sp_20260610"
+            className={inputClass}
+          />
+        </div>
+
+        <div>
+          <label className={labelClass} htmlFor="link_note">
+            Ghi chú link
+          </label>
+          <input
+            id="link_note"
+            name="link_note"
+            type="text"
+            defaultValue={product?.link_note ?? ""}
+            placeholder="VD: chờ chuyển link, link hết hạn..."
             className={inputClass}
           />
         </div>

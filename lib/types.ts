@@ -1,9 +1,16 @@
 export type ProductStatus = "NEW" | "ACTIVE" | "PAUSED" | "ARCHIVED";
 
+/** Trạng thái link affiliate (Phase 11). */
+export type LinkStatus = "NEED_CONVERT" | "READY" | "INVALID";
+
 export type Product = {
   id: string;
   product_name: string;
-  affiliate_link: string;
+  original_url: string | null;
+  affiliate_link: string | null;
+  sub_id: string | null;
+  link_status: LinkStatus;
+  link_note: string | null;
   price_note: string | null;
   target_customer: string | null;
   product_angle: string | null;
@@ -11,6 +18,13 @@ export type Product = {
   status: ProductStatus;
   created_at: string;
   updated_at: string;
+};
+
+/** Nhãn tiếng Việt cho trạng thái link. */
+export const LINK_STATUS_LABELS: Record<LinkStatus, string> = {
+  NEED_CONVERT: "Cần chuyển link",
+  READY: "Sẵn sàng",
+  INVALID: "Link lỗi",
 };
 
 /** Danh sách trạng thái sản phẩm hợp lệ (dùng để validate). */

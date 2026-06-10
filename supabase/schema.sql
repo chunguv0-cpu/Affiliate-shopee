@@ -23,7 +23,11 @@ $$ language plpgsql;
 create table if not exists products (
   id              uuid primary key default gen_random_uuid(),
   product_name    text not null,
-  affiliate_link  text not null,
+  original_url    text,
+  affiliate_link  text,
+  sub_id          text,
+  link_status     text not null default 'NEED_CONVERT',
+  link_note       text,
   price_note      text,
   target_customer text,
   product_angle   text,
@@ -32,11 +36,14 @@ create table if not exists products (
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
   constraint products_status_check
-    check (status in ('NEW', 'ACTIVE', 'PAUSED', 'ARCHIVED'))
+    check (status in ('NEW', 'ACTIVE', 'PAUSED', 'ARCHIVED')),
+  constraint products_link_status_check
+    check (link_status in ('NEED_CONVERT', 'READY', 'INVALID'))
 );
 
-create index if not exists idx_products_status     on products (status);
-create index if not exists idx_products_created_at  on products (created_at desc);
+create index if not exists idx_products_status      on products (status);
+create index if not exists idx_products_link_status  on products (link_status);
+create index if not exists idx_products_created_at   on products (created_at desc);
 
 drop trigger if exists trg_products_updated_at on products;
 create trigger trg_products_updated_at

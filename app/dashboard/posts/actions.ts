@@ -90,6 +90,16 @@ export async function generatePostFromProduct(
     }
 
     const product = productData as Product;
+
+    // Phase 11: chỉ tạo bài khi link affiliate hợp lệ (link_status = READY).
+    if (product.link_status !== "READY" || !product.affiliate_link) {
+      return {
+        ok: false,
+        error:
+          "Sản phẩm chưa có link Affiliate hợp lệ. Vui lòng chuyển link trước khi tạo bài.",
+      };
+    }
+
     const input: ProductInput = {
       id: product.id,
       product_name: product.product_name,
