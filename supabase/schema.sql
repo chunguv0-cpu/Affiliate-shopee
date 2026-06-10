@@ -120,7 +120,7 @@ create table if not exists generated_posts (
   constraint generated_posts_fb_publish_type_check
     check (facebook_publish_type in ('FEED', 'PHOTO', 'VIDEO')),
   constraint generated_posts_creative_pack_status_check
-    check (creative_pack_status in ('PENDING', 'READY', 'PARTIAL', 'FAILED')),
+    check (creative_pack_status in ('PENDING', 'READY', 'PARTIAL', 'FAILED', 'MISSING_PRODUCT_IMAGE')),
   constraint generated_posts_creative_pack_mode_check
     check (creative_pack_mode in ('AUTO', 'FOUND_ONLY', 'GENERATED_ONLY', 'MIXED')),
   constraint generated_posts_publish_mode_check

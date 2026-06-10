@@ -101,7 +101,12 @@ export const CREATIVE_STATUS_LABELS: Record<CreativeStatus, string> = {
 };
 
 // Phase 17 V2 — multi-image creative pack.
-export type CreativePackStatus = "PENDING" | "READY" | "PARTIAL" | "FAILED";
+export type CreativePackStatus =
+  | "PENDING"
+  | "READY"
+  | "PARTIAL"
+  | "FAILED"
+  | "MISSING_PRODUCT_IMAGE";
 export type CreativePackMode = "AUTO" | "FOUND_ONLY" | "GENERATED_ONLY" | "MIXED";
 export type PublishMode = "FEED" | "PHOTO_ALBUM" | "VIDEO";
 export type CreativeAssetSource = "PRODUCT" | "FOUND" | "AI_GENERATED";
@@ -111,6 +116,7 @@ export const CREATIVE_PACK_STATUS_LABELS: Record<CreativePackStatus, string> = {
   READY: "Đủ ảnh",
   PARTIAL: "Chưa đủ ảnh",
   FAILED: "Lỗi dựng ảnh",
+  MISSING_PRODUCT_IMAGE: "Thiếu ảnh thật sản phẩm",
 };
 
 export type PostCreativeAsset = {

@@ -107,7 +107,7 @@ export async function buildCreativePackForPost(
         caption_overlay: g.caption_overlay,
         sort_order: order,
         status: ok ? "READY" : "FAILED",
-        metadata: { style: g.caption_overlay },
+        metadata: { style: g.caption_overlay, mock: g.mock },
       });
       order += 1;
       if (ok) generatedCount += 1;
@@ -136,21 +136,35 @@ export async function buildCreativePackForPost(
   }
 
   const readyTotal = assets.filter((a) => a.status === "READY" && a.image_url).length;
-
-  let status: CreativePackStatus;
-  if (readyTotal >= MIN_ASSETS) status = "READY";
-  else if (readyTotal >= 1) status = "PARTIAL";
-  else status = "FAILED";
+  // Ảnh THẬT sản phẩm = source PRODUCT, READY, có url (mock không tính).
+  const productReady = assets.filter(
+    (a) => a.source_type === "PRODUCT" && a.status === "READY" && a.image_url,
+  ).length;
 
   let mode: CreativePackMode = "AUTO";
   if (foundCount > 0 && generatedCount > 0) mode = "MIXED";
   else if (foundCount > 0) mode = "FOUND_ONLY";
   else if (generatedCount > 0) mode = "GENERATED_ONLY";
 
+  // Guardrail (Hotfix 17.1): KHÔNG album nếu thiếu ảnh thật sản phẩm.
+  let status: CreativePackStatus;
+  let creativeError: string | null = null;
+  if (productReady === 0) {
+    status = "MISSING_PRODUCT_IMAGE";
+    creativeError =
+      "Thiếu ảnh thật sản phẩm — không thể đăng album chỉ gồm ảnh AI. Hãy bổ sung image_url thật hoặc import lại link có ảnh.";
+  } else if (readyTotal >= MIN_ASSETS) {
+    status = "READY";
+  } else if (readyTotal >= 1) {
+    status = "PARTIAL";
+  } else {
+    status = "FAILED";
+    creativeError = "Không dựng được ảnh nào (find + generate đều thất bại).";
+  }
+
+  // Chỉ album khi đủ ảnh + có ảnh thật sản phẩm.
   const publish_mode: PublishMode = status === "READY" ? "PHOTO_ALBUM" : "FEED";
-  const summary = `${readyTotal} ảnh (${foundCount} sản phẩm + ${generatedCount} AI).`;
-  const creativeError =
-    status === "FAILED" ? "Không dựng được ảnh nào (find + generate đều thất bại)." : null;
+  const summary = `${readyTotal} ảnh (${productReady} thật sản phẩm + ${generatedCount} AI).`;
 
   try {
     await supabase
@@ -169,11 +183,12 @@ export async function buildCreativePackForPost(
     /* bỏ qua */
   }
 
+  const isBad = status === "FAILED" || status === "MISSING_PRODUCT_IMAGE";
   await insertPostingLog(
     supabase,
     postId,
-    status === "FAILED" ? PACK_FAILED : PACK_SUCCESS,
-    status === "FAILED" ? "FAILED" : "SUCCESS",
+    isBad ? PACK_FAILED : PACK_SUCCESS,
+    isBad ? "FAILED" : "SUCCESS",
     `Pack: ${status} · ${summary} · publish=${publish_mode}.`,
     { generated_post_id: postId },
   );

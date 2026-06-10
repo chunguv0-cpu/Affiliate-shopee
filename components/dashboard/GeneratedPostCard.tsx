@@ -66,7 +66,13 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
   const affiliateLink = post.products?.affiliate_link ?? null;
   const stateLabel = scheduleStateLabel(post);
   const creativeAssets = post.creative_assets ?? [];
-  const readyAssetCount = creativeAssets.filter((a) => a.status === "READY" && a.image_url).length;
+  const readyAssets = creativeAssets.filter((a) => a.status === "READY" && a.image_url);
+  const readyAssetCount = readyAssets.length;
+  const productImageCount = readyAssets.filter((a) => a.source_type === "PRODUCT").length;
+  const aiImageCount = readyAssets.filter((a) => a.source_type === "AI_GENERATED").length;
+  const hasMockImage = readyAssets.some((a) => (a.image_url ?? "").includes("placehold.co"));
+  const missingProductImage =
+    post.creative_pack_status === "MISSING_PRODUCT_IMAGE" || (readyAssetCount > 0 && productImageCount === 0);
 
   return (
     <article className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -152,7 +158,7 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
                 {post.creative_pack_status ? CREATIVE_PACK_STATUS_LABELS[post.creative_pack_status] : "—"}
               </span>
               <span className="text-xs text-gray-500">
-                {readyAssetCount} ảnh{post.creative_pack_mode ? ` · ${post.creative_pack_mode}` : ""}
+                {readyAssetCount} ảnh · {productImageCount} thật / {aiImageCount} AI{post.creative_pack_mode ? ` · ${post.creative_pack_mode}` : ""}
               </span>
             </div>
             <div className="grid grid-cols-4 gap-2">
@@ -170,12 +176,26 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
                 ),
               )}
             </div>
-            {readyAssetCount < 4 ? (
-              <p className="mt-2 text-xs font-medium text-amber-700">⚠ Chưa đủ 4 ảnh</p>
-            ) : null}
-            {post.creative_pack_status === "FAILED" ? (
-              <p className="mt-2 text-xs font-medium text-red-700">Creative failed{post.creative_error ? `: ${post.creative_error}` : ""}</p>
-            ) : null}
+            <div className="mt-2 space-y-1">
+              {missingProductImage ? (
+                <p className="text-xs font-medium text-red-700">⛔ Thiếu ảnh thật sản phẩm</p>
+              ) : null}
+              {post.creative_pack_mode === "GENERATED_ONLY" ? (
+                <p className="text-xs font-medium text-red-700">⛔ Chỉ có ảnh AI — không được đăng</p>
+              ) : null}
+              {hasMockImage ? (
+                <p className="text-xs font-medium text-amber-700">⚠ Ảnh mock — không được đăng production</p>
+              ) : null}
+              {readyAssetCount < 4 && !missingProductImage ? (
+                <p className="text-xs font-medium text-amber-700">⚠ Chưa đủ 4 ảnh</p>
+              ) : null}
+              {post.creative_pack_status === "FAILED" ? (
+                <p className="text-xs font-medium text-red-700">Creative failed{post.creative_error ? `: ${post.creative_error}` : ""}</p>
+              ) : null}
+              {missingProductImage ? (
+                <p className="text-xs text-gray-500">Vui lòng bổ sung image_url thật cho sản phẩm hoặc import lại link có ảnh.</p>
+              ) : null}
+            </div>
           </div>
         ) : null}
 

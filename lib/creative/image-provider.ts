@@ -26,6 +26,8 @@ export type GeneratedImage = {
   caption_overlay: string;
   source_type: "AI_GENERATED";
   status: "READY" | "FAILED";
+  /** Ảnh placeholder/mock — KHÔNG được dùng đăng production. */
+  mock: boolean;
 };
 
 export function getImageProvider(): ImageProvider {
@@ -42,32 +44,37 @@ const STYLES: { key: string; overlay: string; desc: string }[] = [
   { key: "benefit", overlay: "Lợi ích nổi bật", desc: "benefit-focused composition, before/after-like clean layout (no text)" },
 ];
 
-function buildPrompt(input: GenerateImageInput, styleDesc: string): string {
+function buildPrompt(input: GenerateImageInput, styleDesc: string, hasRef: boolean): string {
   const parts = [
-    `Realistic commercial photo for an affiliate product post.`,
-    `Product: ${input.product_name}.`,
+    `Supporting visual for an affiliate product post (NOT the product hero shot).`,
+    `Theme: ${input.product_name}.`,
     input.category ? `Category: ${input.category}.` : "",
     input.target_customer ? `Audience: ${input.target_customer}.` : "",
     input.content_angle ? `Angle: ${input.content_angle}.` : "",
     `Style: ${styleDesc}.`,
-    `Constraints: no text overlay, no fake brand logos, no price tags, no fake screenshots, no medical/health claims, no misleading badges. Clean, trustworthy, scroll-stopping.`,
+    hasRef
+      ? `A real product image is provided separately as reference; you may match its general look, but stay generic.`
+      : `No product reference provided — keep it GENERIC. Do NOT imitate any specific product design.`,
+    `Hard constraints: do NOT invent fake product packaging, brand names or logos; do NOT add price text; do NOT create fake screenshots, fake reviews or fake badges; no medical/health claims; no text overlay. The real product photo is shown separately. Clean, trustworthy lifestyle/checklist/benefit visual only.`,
   ];
   return parts.filter(Boolean).join(" ");
 }
 
 function mockImages(input: GenerateImageInput, count: number): GeneratedImage[] {
+  const hasRef = Boolean(input.product_image_ref);
   const out: GeneratedImage[] = [];
   for (let i = 0; i < count; i += 1) {
     const style = STYLES[i % STYLES.length];
-    const label = `${input.product_name} · ${style.overlay}`.slice(0, 60);
-    // Ảnh placeholder công khai (https) — dùng để test album publish.
+    const label = `AI · ${style.overlay}`.slice(0, 40);
+    // Ảnh placeholder công khai (https). LÀ MOCK — không dùng đăng production.
     const url = `https://placehold.co/800x800/png?text=${encodeURIComponent(label)}`;
     out.push({
       image_url: url,
-      prompt: buildPrompt(input, style.desc),
+      prompt: buildPrompt(input, style.desc, hasRef),
       caption_overlay: style.overlay,
       source_type: "AI_GENERATED",
       status: "READY",
+      mock: true,
     });
   }
   return out;
@@ -78,10 +85,11 @@ async function openaiImages(input: GenerateImageInput, count: number): Promise<G
   const model = process.env.OPENAI_IMAGE_MODEL?.trim() || "dall-e-3";
   if (!apiKey) return [];
   const client = new OpenAI({ apiKey });
+  const hasRef = Boolean(input.product_image_ref);
   const out: GeneratedImage[] = [];
   for (let i = 0; i < count; i += 1) {
     const style = STYLES[i % STYLES.length];
-    const prompt = buildPrompt(input, style.desc);
+    const prompt = buildPrompt(input, style.desc, hasRef);
     try {
       const res = await client.images.generate({ model, prompt, n: 1, size: "1024x1024" });
       const url = res.data?.[0]?.url ?? null;
@@ -91,9 +99,10 @@ async function openaiImages(input: GenerateImageInput, count: number): Promise<G
         caption_overlay: style.overlay,
         source_type: "AI_GENERATED",
         status: url ? "READY" : "FAILED",
+        mock: false,
       });
     } catch {
-      out.push({ image_url: null, prompt, caption_overlay: style.overlay, source_type: "AI_GENERATED", status: "FAILED" });
+      out.push({ image_url: null, prompt, caption_overlay: style.overlay, source_type: "AI_GENERATED", status: "FAILED", mock: false });
     }
   }
   return out;

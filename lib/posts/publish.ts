@@ -154,7 +154,7 @@ export async function publishGeneratedPostById(
       return { ok: false, error: msg };
     }
 
-    // Chuẩn bị ảnh cho ALBUM.
+    // Chuẩn bị ảnh cho ALBUM (Hotfix 17.1 — guardrail ảnh thật sản phẩm).
     let albumUrls: string[] = [];
     if (effective === "ALBUM") {
       if (row.creative_pack_status !== "READY") {
@@ -164,16 +164,35 @@ export async function publishGeneratedPostById(
       }
       const { data: assetRows } = await supabase
         .from("post_creative_assets")
-        .select("image_url, sort_order, status")
+        .select("image_url, sort_order, status, source_type, metadata")
         .eq("generated_post_id", postId)
         .eq("status", "READY")
         .order("sort_order", { ascending: true });
-      albumUrls = ((assetRows ?? []) as Array<{ image_url: string | null }>)
-        .map((a) => (a.image_url ?? "").trim())
-        .filter((u) => /^https?:\/\//i.test(u));
+      const rows = (assetRows ?? []) as Array<{
+        image_url: string | null;
+        source_type: string | null;
+        metadata: unknown;
+      }>;
+      const isProd = process.env.NODE_ENV === "production";
+      const isMock = (m: unknown) =>
+        !!m && typeof m === "object" && (m as Record<string, unknown>).mock === true;
+      // Chỉ ảnh có URL hợp lệ; ở production loại bỏ ảnh mock.
+      const usable = rows.filter((a) => {
+        const url = (a.image_url ?? "").trim();
+        if (!/^https?:\/\//i.test(url)) return false;
+        if (isProd && isMock(a.metadata)) return false;
+        return true;
+      });
+      const hasProductImage = usable.some((a) => a.source_type === "PRODUCT");
+      if (!hasProductImage) {
+        const msg = "Album cần ít nhất 1 ảnh THẬT của sản phẩm (source PRODUCT). Không đăng album chỉ gồm ảnh AI/mock.";
+        await failPost(msg, "CREATIVE_PRODUCT_IMAGE_REQUIRED");
+        return { ok: false, error: msg };
+      }
+      albumUrls = usable.map((a) => (a.image_url as string).trim());
       if (albumUrls.length < 4) {
-        const msg = `Album cần >= 4 ảnh nhưng chỉ có ${albumUrls.length}.`;
-        await failPost(msg, "PUBLISH_FACEBOOK_PHOTO_ALBUM_FAILED");
+        const msg = `Album cần >= 4 ảnh hợp lệ (đã loại ảnh mock ở production) nhưng chỉ có ${albumUrls.length}.`;
+        await failPost(msg, "CREATIVE_PRODUCT_IMAGE_REQUIRED");
         return { ok: false, error: msg };
       }
     }

@@ -97,7 +97,13 @@ export async function enrichShopeeAffiliateLink(
 
     const title = metaContent(html, "og:title") ?? titleTag(html);
     const description = metaContent(html, "og:description");
-    const image = metaContent(html, "og:image");
+    // Hotfix 17.1: ưu tiên nhiều nguồn ảnh thật (og:image -> og:image:url -> twitter:image).
+    const image =
+      metaContent(html, "og:image") ??
+      metaContent(html, "og:image:url") ??
+      metaContent(html, "og:image:secure_url") ??
+      metaContent(html, "twitter:image") ??
+      metaContent(html, "twitter:image:src");
 
     const hasMeta = Boolean(title || description || image);
     return {
