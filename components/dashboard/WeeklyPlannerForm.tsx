@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type FormEvent } from "react";
 
-import { generateWeeklyCampaignRecommendation } from "@/app/dashboard/ai-planner/actions";
+import { createRecommendationJob } from "@/app/dashboard/ai-planner/actions";
 import type { CampaignGoal } from "@/lib/ai/campaign-planner";
 
 const inputClass =
@@ -64,12 +64,17 @@ export default function WeeklyPlannerForm({
     };
 
     startTransition(async () => {
-      const r = await generateWeeklyCampaignRecommendation(input);
-      if (!r.ok) {
-        setError(r.error);
-        return;
+      try {
+        const r = await createRecommendationJob(input);
+        if (!r.ok) {
+          setError(r.error);
+          return;
+        }
+        // Chuyển ngay sang trang chi tiết (RUNNING) — AI chạy nền ở trang đó.
+        router.push(`/dashboard/ai-planner/${r.id}`);
+      } catch {
+        setError("Không tạo được job. Vui lòng thử lại.");
       }
-      router.push(`/dashboard/ai-planner/${r.id}`);
     });
   }
 
@@ -173,7 +178,7 @@ export default function WeeklyPlannerForm({
         disabled={pending}
         className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {pending ? "AI đang nghiên cứu & lập kế hoạch..." : "🧠 Tạo gợi ý chiến dịch"}
+        {pending ? "Đang khởi tạo..." : "🧠 Tạo gợi ý chiến dịch"}
       </button>
     </form>
   );

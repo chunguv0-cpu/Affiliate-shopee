@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import type { CampaignGoal, PlannerProduct } from "@/lib/ai/campaign-planner";
+import { normalizeCampaignPlan } from "@/lib/ai/normalize-campaign-plan";
 import { validateCampaignPlanQuality } from "@/lib/ai/plan-quality-checker";
 import {
   generateStrategicWeeklyPlan,
@@ -50,13 +51,20 @@ export type GenerateRecInput = {
   detail_level?: DetailLevel;
 };
 
-const GEN_ACTION = "GENERATE_AI_STRATEGIC_WEEKLY_PLAN";
-const QUALITY_ACTION = "PLAN_QUALITY_WARNING";
+const JOB_STARTED = "AI_PLANNER_JOB_STARTED";
+const JOB_SUCCESS = "AI_PLANNER_JOB_SUCCESS";
+const JOB_FAILED = "AI_PLANNER_JOB_FAILED";
+const QUALITY_ACTION = "AI_PLANNER_QUALITY_WARNING";
 const APPROVE_ACTION = "APPROVE_AI_CAMPAIGN_PLAN";
 const REJECT_ACTION = "REJECT_AI_CAMPAIGN_PLAN";
 const RESEARCH_ACTION = "RUN_MARKET_RESEARCH";
 const VALID_GOALS: CampaignGoal[] = ["clicks", "orders", "commission", "engagement", "balanced"];
-const MAX_QUERIES = 15;
+
+// Phần 9 — giới hạn research (giảm tải để tránh request quá lâu / crash).
+const DEFAULT_RESEARCH_MAX_QUERIES = Number(process.env.DEFAULT_RESEARCH_MAX_QUERIES) || 6;
+const DEFAULT_RESEARCH_MAX_RESULTS_PER_QUERY =
+  Number(process.env.DEFAULT_RESEARCH_MAX_RESULTS_PER_QUERY) || 3;
+const MAX_RESEARCH_SOURCES = Number(process.env.MAX_RESEARCH_SOURCES) || 24;
 
 export type RunResearchResult =
   | { ok: true; research_run_id: string }
@@ -76,8 +84,11 @@ export type ResearchInput = {
  */
 export async function runMarketResearchForWeeklyPlan(
   input: ResearchInput,
+  opts?: { maxQueries?: number; maxResults?: number },
 ): Promise<RunResearchResult> {
   const goal = VALID_GOALS.includes(input?.goal) ? input.goal : "balanced";
+  const maxQueries = Math.max(1, Math.min(10, opts?.maxQueries ?? DEFAULT_RESEARCH_MAX_QUERIES));
+  const maxResults = Math.max(1, Math.min(5, opts?.maxResults ?? DEFAULT_RESEARCH_MAX_RESULTS_PER_QUERY));
 
   let supabase;
   try {
@@ -131,22 +142,22 @@ export async function runMarketResearchForWeeklyPlan(
       goal,
       target_customer: input.target_customer?.trim() || null,
       notes: input.notes?.trim() || null,
-    }).slice(0, MAX_QUERIES);
+    }).slice(0, maxQueries);
 
     await supabase.from("market_research_runs").update({ queries }).eq("id", runId);
 
-    // Search song song, mỗi query tối đa 5 kết quả.
+    // Search song song; giảm tải theo cấu hình.
     const perQuery = await Promise.all(
       queries.map(async (q) => {
         try {
-          const res = await searchWeb(q, { maxResults: 5 });
+          const res = await searchWeb(q, { maxResults });
           return res.map((r) => ({ query: q, ...r }));
         } catch {
           return [] as (SearchResult & { query: string })[];
         }
       }),
     );
-    const flat = perQuery.flat();
+    const flat = perQuery.flat().slice(0, MAX_RESEARCH_SOURCES);
 
     if (flat.length > 0) {
       await supabase.from("market_research_sources").insert(
@@ -206,14 +217,26 @@ export async function runMarketResearchForWeeklyPlan(
   }
 }
 
-export async function generateWeeklyCampaignRecommendation(
-  input: GenerateRecInput,
-): Promise<GenerateRecResult> {
-  let goal = VALID_GOALS.includes(input?.goal) ? input.goal : "balanced";
-  // Chế độ chiến lược có thể ép mục tiêu (vd "Tăng đơn hàng" -> conversion-focused).
+export type RunJobResult =
+  | { ok: true; id: string }
+  | { ok: false; id?: string; error: string };
+
+/** Áp mục tiêu cuối cùng (chế độ chiến lược có thể ép goal). */
+function computeGoal(input: GenerateRecInput): CampaignGoal {
+  let goal: CampaignGoal = VALID_GOALS.includes(input?.goal) ? input.goal : "balanced";
   if (input?.strategy_mode === "boost_orders") goal = "orders";
   else if (input?.strategy_mode === "boost_commission") goal = "commission";
   else if (input?.strategy_mode === "boost_engagement") goal = "engagement";
+  return goal;
+}
+
+/**
+ * Bước 1: tạo job RUNNING nhanh, trả id ngay (không chờ research/AI).
+ */
+export async function createRecommendationJob(
+  input: GenerateRecInput,
+): Promise<GenerateRecResult> {
+  const goal = computeGoal(input);
   const weekStart = (input?.week_start ?? "").trim();
   const weekEnd = (input?.week_end ?? "").trim();
   if (!weekStart || !weekEnd) {
@@ -229,16 +252,83 @@ export async function generateWeeklyCampaignRecommendation(
   }
 
   try {
-    // Sản phẩm ACTIVE + READY.
-    const { data: productsData, error: productsErr } = await supabase
+    const { count } = await supabase
       .from("products")
-      .select("id, product_name, sub_id, affiliate_link, status, link_status")
+      .select("id", { count: "exact", head: true })
       .eq("status", "ACTIVE")
       .eq("link_status", "READY");
-
-    if (productsErr) {
-      return { ok: false, error: `Không tải được sản phẩm: ${productsErr.message}` };
+    if (!count || count === 0) {
+      return { ok: false, error: "Chưa có sản phẩm READY. Hãy import link affiliate trước." };
     }
+
+    const { data: inserted, error } = await supabase
+      .from("ai_campaign_recommendations")
+      .insert({
+        title: `Đang lập kế hoạch — ${weekStart} → ${weekEnd}`,
+        goal,
+        week_start: weekStart,
+        week_end: weekEnd,
+        status: "RUNNING",
+        job_input: { ...input, goal },
+      })
+      .select("id")
+      .single();
+
+    if (error || !inserted) {
+      return { ok: false, error: `Tạo job thất bại: ${error?.message ?? "không rõ"}` };
+    }
+
+    await insertPostingLog(
+      supabase,
+      null,
+      JOB_STARTED,
+      "SUCCESS",
+      `Bắt đầu lập kế hoạch chiến lược (mục tiêu: ${goal}).`,
+      { recommendation_id: inserted.id },
+    );
+
+    revalidatePath("/dashboard/ai-planner");
+    return { ok: true, id: inserted.id as string };
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Tạo job thất bại: ${m}` };
+  }
+}
+
+/**
+ * Bước 2: chạy job (research + AI + chuẩn hóa + quality) và cập nhật SUCCESS/FAILED.
+ * KHÔNG bao giờ throw ra client. Idempotent nhẹ: chỉ chạy khi status = RUNNING.
+ */
+export async function runRecommendationJob(id: string): Promise<RunJobResult> {
+  if (!id || typeof id !== "string") return { ok: false, error: "Thiếu mã gợi ý." };
+
+  let supabase;
+  try {
+    supabase = createSupabaseAdminClient();
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, id, error: `Không kết nối được cơ sở dữ liệu: ${m}` };
+  }
+
+  const { data: rec, error: recErr } = await supabase
+    .from("ai_campaign_recommendations")
+    .select("id, status, job_input")
+    .eq("id", id)
+    .single();
+  if (recErr || !rec) return { ok: false, id, error: "Không tìm thấy gợi ý." };
+  if (rec.status !== "RUNNING") return { ok: true, id }; // đã xử lý xong
+
+  const input = (rec.job_input ?? {}) as GenerateRecInput;
+  const goal = computeGoal(input);
+  const weekStart = (input.week_start ?? "").trim();
+  const weekEnd = (input.week_end ?? "").trim();
+
+  try {
+    const { data: productsData } = await supabase
+      .from("products")
+      .select("id, product_name, sub_id, affiliate_link")
+      .eq("status", "ACTIVE")
+      .eq("link_status", "READY");
     const products = (productsData ?? []) as {
       id: string;
       product_name: string;
@@ -246,16 +336,14 @@ export async function generateWeeklyCampaignRecommendation(
       affiliate_link: string | null;
     }[];
     if (products.length === 0) {
-      return { ok: false, error: "Chưa có sản phẩm READY. Hãy import link affiliate trước." };
+      throw new Error("Không còn sản phẩm READY.");
     }
 
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-
     const reportsRes = await supabase
       .from("affiliate_reports")
       .select("sub_id, affiliate_link, clicks, orders, commission")
       .gte("created_at", since);
-
     const reports = (reportsRes.data ?? []) as {
       sub_id: string | null;
       affiliate_link: string | null;
@@ -275,7 +363,6 @@ export async function generateWeeklyCampaignRecommendation(
       }
       return acc;
     };
-
     const plannerProducts: PlannerProduct[] = products.map((p) => {
       const agg = sumFor(p.sub_id, p.affiliate_link);
       return {
@@ -289,7 +376,6 @@ export async function generateWeeklyCampaignRecommendation(
       };
     });
 
-    // Tổng quan.
     let totalClicks = 0;
     let totalOrders = 0;
     let totalCommission = 0;
@@ -307,69 +393,60 @@ export async function generateWeeklyCampaignRecommendation(
       has_report_data: reports.length > 0,
     };
 
-    // Nghiên cứu thị trường (tùy chọn).
+    // Research (giảm tải): very_detailed -> 8 query, còn lại 6.
     let research: MarketResearchInsights | null = null;
     let researchRunId: string | null = null;
     if (input.use_market_research) {
-      let rid = input.research_run_id || null;
-      if (!rid) {
-        const rr = await runMarketResearchForWeeklyPlan({
+      const maxQueries = input.detail_level === "very_detailed" ? 8 : DEFAULT_RESEARCH_MAX_QUERIES;
+      const rr = await runMarketResearchForWeeklyPlan(
+        {
           week_start: weekStart,
           week_end: weekEnd,
           goal,
           target_customer: input.target_customer,
           notes: input.notes,
-        });
-        if (rr.ok) rid = rr.research_run_id;
-      }
-      if (rid) {
+        },
+        { maxQueries, maxResults: DEFAULT_RESEARCH_MAX_RESULTS_PER_QUERY },
+      );
+      if (rr.ok) {
         const { data: runRow } = await supabase
           .from("market_research_runs")
           .select("insights")
-          .eq("id", rid)
+          .eq("id", rr.research_run_id)
           .single();
         if (runRow?.insights) {
           research = runRow.insights as MarketResearchInsights;
-          researchRunId = rid;
+          researchRunId = rr.research_run_id;
         }
       }
     }
 
-    // Gọi AI chiến lược.
-    let plan;
-    try {
-      plan = await generateStrategicWeeklyPlan({
-        goal,
-        week_start: weekStart,
-        week_end: weekEnd,
-        target_customer: input.target_customer?.trim() || null,
-        priority_notes: input.priority_notes?.trim() || null,
-        strategy_mode: input.strategy_mode ?? null,
-        detail_level: input.detail_level ?? "very_detailed",
-        products: plannerProducts,
-        summary,
-        research,
-      });
-    } catch (err) {
-      const m = err instanceof Error ? err.message : "Lỗi không xác định.";
-      await insertPostingLog(supabase, null, GEN_ACTION, "FAILED", `Tạo gợi ý AI thất bại: ${m}`, { goal });
-      return { ok: false, error: `Tạo gợi ý AI thất bại: ${m}` };
-    }
+    // AI chiến lược (parsePlan tự fallback mock nếu JSON lỗi -> không crash).
+    const rawPlan = await generateStrategicWeeklyPlan({
+      goal,
+      week_start: weekStart,
+      week_end: weekEnd,
+      target_customer: input.target_customer?.trim() || null,
+      priority_notes: input.priority_notes?.trim() || null,
+      strategy_mode: input.strategy_mode ?? null,
+      detail_level: input.detail_level ?? "very_detailed",
+      products: plannerProducts,
+      summary,
+      research,
+    });
 
+    const plan = normalizeCampaignPlan(rawPlan);
     const qualityWarnings = validateCampaignPlanQuality(plan, goal);
 
-    const { data: inserted, error: insertErr } = await supabase
+    const { error: updErr } = await supabase
       .from("ai_campaign_recommendations")
-      .insert({
+      .update({
         title: plan.title,
-        goal: plan.goal,
-        week_start: weekStart,
-        week_end: weekEnd,
+        goal: plan.goal || goal,
         status: "DRAFT",
         summary: plan.executive_summary,
         strategy: plan.goal_strategy?.main_strategy ?? null,
         ai_reasoning_summary: plan.executive_summary,
-        raw_ai_response: plan.raw_ai_response,
         research_run_id: researchRunId,
         market_research: research,
         executive_summary: plan.executive_summary,
@@ -385,42 +462,52 @@ export async function generateWeeklyCampaignRecommendation(
         risks: plan.risks_and_controls,
         next_actions: plan.next_actions,
         quality_warnings: qualityWarnings,
+        error_message: null,
+        updated_at: new Date().toISOString(),
       })
-      .select("id")
-      .single();
+      .eq("id", id);
 
-    if (insertErr || !inserted) {
-      const m = insertErr?.message ?? "không rõ nguyên nhân";
-      await insertPostingLog(supabase, null, GEN_ACTION, "FAILED", `Lưu gợi ý thất bại: ${m}`, { goal });
-      return { ok: false, error: `Lưu gợi ý thất bại: ${m}` };
-    }
+    if (updErr) throw new Error(updErr.message);
 
-    await insertPostingLog(
-      supabase,
-      null,
-      GEN_ACTION,
-      "SUCCESS",
-      `Đã tạo gợi ý chiến lược tuần (mục tiêu: ${goal}).`,
-      { recommendation_id: inserted.id, goal },
-    );
-
+    await insertPostingLog(supabase, null, JOB_SUCCESS, "SUCCESS", `Đã lập kế hoạch (mục tiêu: ${goal}).`, {
+      recommendation_id: id,
+    });
     if (qualityWarnings.length > 0) {
       await insertPostingLog(
         supabase,
         null,
         QUALITY_ACTION,
         "FAILED",
-        `Kế hoạch còn thiếu chiều sâu: ${qualityWarnings.join("; ")}`,
-        { recommendation_id: inserted.id },
+        `Kế hoạch còn thiếu chiều sâu: ${qualityWarnings.join("; ")}`.slice(0, 5000),
+        { recommendation_id: id },
       );
     }
 
+    revalidatePath(`/dashboard/ai-planner/${id}`);
     revalidatePath("/dashboard/ai-planner");
-    return { ok: true, id: inserted.id as string };
+    return { ok: true, id };
   } catch (err) {
-    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
-    return { ok: false, error: `Tạo gợi ý thất bại: ${m}` };
+    const m = (err instanceof Error ? err.message : "Lỗi không xác định.").slice(0, 2000);
+    await supabase
+      .from("ai_campaign_recommendations")
+      .update({ status: "FAILED", error_message: m, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    await insertPostingLog(supabase, null, JOB_FAILED, "FAILED", `Job lỗi: ${m}`.slice(0, 5000), {
+      recommendation_id: id,
+    });
+    revalidatePath(`/dashboard/ai-planner/${id}`);
+    return { ok: false, id, error: m };
   }
+}
+
+/** Backward-compat: tạo + chạy đồng bộ (trả về sau khi xong). */
+export async function generateWeeklyCampaignRecommendation(
+  input: GenerateRecInput,
+): Promise<GenerateRecResult> {
+  const created = await createRecommendationJob(input);
+  if (!created.ok) return created;
+  await runRecommendationJob(created.id);
+  return { ok: true, id: created.id };
 }
 
 export type PlannerPrereqs = { canGenerate: boolean; hasReports: boolean };

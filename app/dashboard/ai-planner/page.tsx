@@ -16,6 +16,8 @@ const STATUS_STYLES: Record<string, string> = {
   APPROVED: "bg-green-50 text-green-700",
   REJECTED: "bg-red-50 text-red-700",
   CONVERTED_TO_CAMPAIGN: "bg-blue-50 text-blue-700",
+  RUNNING: "bg-blue-50 text-blue-700",
+  FAILED: "bg-red-100 text-red-700",
 };
 
 function fmtDate(iso: string | null): string {

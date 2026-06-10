@@ -143,13 +143,17 @@ export type RecommendationStatus =
   | "DRAFT"
   | "APPROVED"
   | "REJECTED"
-  | "CONVERTED_TO_CAMPAIGN";
+  | "CONVERTED_TO_CAMPAIGN"
+  | "RUNNING"
+  | "FAILED";
 
 export const RECOMMENDATION_STATUS_LABELS: Record<RecommendationStatus, string> = {
   DRAFT: "Nháp",
   APPROVED: "Đã duyệt",
   REJECTED: "Từ chối",
   CONVERTED_TO_CAMPAIGN: "Đã tạo chiến dịch",
+  RUNNING: "Đang chạy",
+  FAILED: "Thất bại",
 };
 
 /** Một bản ghi gợi ý chiến dịch tuần do AI tạo (Phase 13). */
@@ -187,6 +191,8 @@ export type AICampaignRecommendation = {
   measurement_plan?: unknown;
   next_actions?: unknown;
   quality_warnings?: unknown;
+  error_message?: string | null;
+  job_input?: unknown;
   created_at: string;
   updated_at: string;
 };
