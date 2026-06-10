@@ -2,11 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 
+import type { CampaignGoal, PlannerProduct } from "@/lib/ai/campaign-planner";
+import { validateCampaignPlanQuality } from "@/lib/ai/plan-quality-checker";
 import {
-  generateWeeklyCampaignPlan,
-  type CampaignGoal,
-  type PlannerProduct,
-} from "@/lib/ai/campaign-planner";
+  generateStrategicWeeklyPlan,
+  type DetailLevel,
+  type StrategyMode,
+} from "@/lib/ai/strategic-planner";
 import { toNumberSafe } from "@/lib/analytics";
 import { insertPostingLog } from "@/lib/posts/log";
 import { generateResearchQueries } from "@/lib/research/query-generator";
@@ -43,9 +45,13 @@ export type GenerateRecInput = {
   notes?: string;
   use_market_research?: boolean;
   research_run_id?: string;
+  priority_notes?: string;
+  strategy_mode?: StrategyMode;
+  detail_level?: DetailLevel;
 };
 
-const GEN_ACTION = "GENERATE_AI_WEEKLY_CAMPAIGN_PLAN";
+const GEN_ACTION = "GENERATE_AI_STRATEGIC_WEEKLY_PLAN";
+const QUALITY_ACTION = "PLAN_QUALITY_WARNING";
 const APPROVE_ACTION = "APPROVE_AI_CAMPAIGN_PLAN";
 const REJECT_ACTION = "REJECT_AI_CAMPAIGN_PLAN";
 const RESEARCH_ACTION = "RUN_MARKET_RESEARCH";
@@ -203,7 +209,11 @@ export async function runMarketResearchForWeeklyPlan(
 export async function generateWeeklyCampaignRecommendation(
   input: GenerateRecInput,
 ): Promise<GenerateRecResult> {
-  const goal = VALID_GOALS.includes(input?.goal) ? input.goal : "balanced";
+  let goal = VALID_GOALS.includes(input?.goal) ? input.goal : "balanced";
+  // Chế độ chiến lược có thể ép mục tiêu (vd "Tăng đơn hàng" -> conversion-focused).
+  if (input?.strategy_mode === "boost_orders") goal = "orders";
+  else if (input?.strategy_mode === "boost_commission") goal = "commission";
+  else if (input?.strategy_mode === "boost_engagement") goal = "engagement";
   const weekStart = (input?.week_start ?? "").trim();
   const weekEnd = (input?.week_end ?? "").trim();
   if (!weekStart || !weekEnd) {
@@ -241,16 +251,10 @@ export async function generateWeeklyCampaignRecommendation(
 
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    const [reportsRes, postsRes] = await Promise.all([
-      supabase
-        .from("affiliate_reports")
-        .select("sub_id, affiliate_link, clicks, orders, commission")
-        .gte("created_at", since),
-      supabase
-        .from("generated_posts")
-        .select("product_id, content_angle_variant, scheduled_at")
-        .gte("created_at", since),
-    ]);
+    const reportsRes = await supabase
+      .from("affiliate_reports")
+      .select("sub_id, affiliate_link, clicks, orders, commission")
+      .gte("created_at", since);
 
     const reports = (reportsRes.data ?? []) as {
       sub_id: string | null;
@@ -258,11 +262,6 @@ export async function generateWeeklyCampaignRecommendation(
       clicks: unknown;
       orders: unknown;
       commission: unknown;
-    }[];
-    const posts = (postsRes.data ?? []) as {
-      product_id: string | null;
-      content_angle_variant: string | null;
-      scheduled_at: string | null;
     }[];
 
     const sumFor = (subId: string | null, link: string | null) => {
@@ -308,42 +307,6 @@ export async function generateWeeklyCampaignRecommendation(
       has_report_data: reports.length > 0,
     };
 
-    // Angle hiệu quả (gần đúng): gộp metric các sản phẩm (distinct) theo angle.
-    const productById = new Map(plannerProducts.map((p) => [p.product_id, p]));
-    const angleAgg = new Map<string, { products: Set<string>; clicks: number; orders: number; commission: number }>();
-    for (const post of posts) {
-      const angle = post.content_angle_variant;
-      if (!angle || !post.product_id) continue;
-      const prod = productById.get(post.product_id);
-      if (!prod) continue;
-      const a = angleAgg.get(angle) ?? { products: new Set<string>(), clicks: 0, orders: 0, commission: 0 };
-      if (!a.products.has(prod.product_id)) {
-        a.products.add(prod.product_id);
-        a.clicks += prod.clicks;
-        a.orders += prod.orders;
-        a.commission += prod.commission;
-      }
-      angleAgg.set(angle, a);
-    }
-    const topAngles = [...angleAgg.entries()]
-      .map(([angle, a]) => ({ angle, clicks: a.clicks, orders: a.orders, commission: a.commission }))
-      .sort((x, y) => y.commission - x.commission)
-      .slice(0, 6);
-
-    // Khung giờ đã dùng.
-    const timeAgg = new Map<string, number>();
-    for (const post of posts) {
-      if (!post.scheduled_at) continue;
-      const d = new Date(post.scheduled_at);
-      if (Number.isNaN(d.getTime())) continue;
-      const t = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-      timeAgg.set(t, (timeAgg.get(t) ?? 0) + 1);
-    }
-    const topTimes = [...timeAgg.entries()]
-      .map(([time, postsCount]) => ({ time, posts: postsCount }))
-      .sort((a, b) => b.posts - a.posts)
-      .slice(0, 6);
-
     // Nghiên cứu thị trường (tùy chọn).
     let research: MarketResearchInsights | null = null;
     let researchRunId: string | null = null;
@@ -372,19 +335,19 @@ export async function generateWeeklyCampaignRecommendation(
       }
     }
 
-    // Gọi AI.
+    // Gọi AI chiến lược.
     let plan;
     try {
-      plan = await generateWeeklyCampaignPlan({
+      plan = await generateStrategicWeeklyPlan({
         goal,
         week_start: weekStart,
         week_end: weekEnd,
         target_customer: input.target_customer?.trim() || null,
-        notes: input.notes?.trim() || null,
+        priority_notes: input.priority_notes?.trim() || null,
+        strategy_mode: input.strategy_mode ?? null,
+        detail_level: input.detail_level ?? "very_detailed",
         products: plannerProducts,
         summary,
-        topAngles,
-        topTimes,
         research,
       });
     } catch (err) {
@@ -392,6 +355,8 @@ export async function generateWeeklyCampaignRecommendation(
       await insertPostingLog(supabase, null, GEN_ACTION, "FAILED", `Tạo gợi ý AI thất bại: ${m}`, { goal });
       return { ok: false, error: `Tạo gợi ý AI thất bại: ${m}` };
     }
+
+    const qualityWarnings = validateCampaignPlanQuality(plan, goal);
 
     const { data: inserted, error: insertErr } = await supabase
       .from("ai_campaign_recommendations")
@@ -401,21 +366,25 @@ export async function generateWeeklyCampaignRecommendation(
         week_start: weekStart,
         week_end: weekEnd,
         status: "DRAFT",
-        summary: plan.summary,
-        strategy: plan.strategy,
-        recommended_products: plan.recommended_products,
-        recommended_schedule: plan.recommended_schedule,
-        content_angles: plan.content_angles,
-        engagement_hooks: plan.engagement_hooks,
-        risks: plan.risks,
-        ai_reasoning_summary: plan.ai_reasoning_summary,
+        summary: plan.executive_summary,
+        strategy: plan.goal_strategy?.main_strategy ?? null,
+        ai_reasoning_summary: plan.executive_summary,
         raw_ai_response: plan.raw_ai_response,
         research_run_id: researchRunId,
-        campaign_concept: plan.campaign_concept,
-        interaction_plan: plan.interaction_plan,
-        creative_directions: plan.creative_directions,
-        suggested_new_products: plan.suggested_new_products,
         market_research: research,
+        executive_summary: plan.executive_summary,
+        market_diagnosis: plan.market_diagnosis,
+        internal_data_diagnosis: plan.internal_data_diagnosis,
+        goal_strategy: plan.goal_strategy,
+        product_decision_table: plan.product_decision_table,
+        products_to_source: plan.products_to_source,
+        weekly_execution_plan: plan.weekly_execution_plan,
+        engagement_system: plan.engagement_system,
+        creative_brief: plan.creative_brief,
+        measurement_plan: plan.measurement_plan,
+        risks: plan.risks_and_controls,
+        next_actions: plan.next_actions,
+        quality_warnings: qualityWarnings,
       })
       .select("id")
       .single();
@@ -431,9 +400,20 @@ export async function generateWeeklyCampaignRecommendation(
       null,
       GEN_ACTION,
       "SUCCESS",
-      `Đã tạo gợi ý chiến dịch tuần (mục tiêu: ${goal}).`,
+      `Đã tạo gợi ý chiến lược tuần (mục tiêu: ${goal}).`,
       { recommendation_id: inserted.id, goal },
     );
+
+    if (qualityWarnings.length > 0) {
+      await insertPostingLog(
+        supabase,
+        null,
+        QUALITY_ACTION,
+        "FAILED",
+        `Kế hoạch còn thiếu chiều sâu: ${qualityWarnings.join("; ")}`,
+        { recommendation_id: inserted.id },
+      );
+    }
 
     revalidatePath("/dashboard/ai-planner");
     return { ok: true, id: inserted.id as string };

@@ -210,6 +210,19 @@ AI có thể **nghiên cứu thị trường bên ngoài** (Search API công kha
   *interaction plan*, *creative directions*. Vẫn **cần người dùng Duyệt** trước khi tạo campaign/đăng bài.
 - Lưu ý: trên gói Vercel Hobby, function có giới hạn thời gian — nếu dùng provider thật + nhiều query có thể chậm; `mock` thì tức thời.
 
+## 9f. AI Strategic Campaign Brain (Phase 13.2)
+
+AI Planner đã nâng cấp thành **chiến lược bán hàng** thay vì tóm tắt chung chung.
+
+- **Quy trình 4 bước:** Hiểu thị trường (Tavily) → Chẩn đoán dữ liệu nội bộ → Chiến lược theo mục tiêu → Kế hoạch hành động chi tiết.
+- **Dữ liệu dùng:** products READY + affiliate_reports (30 ngày) + nghiên cứu Tavily. Nếu dữ liệu nội bộ ít → AI nói rõ "kế hoạch test có kiểm soát" + nêu giả thuyết + cách đo sau 7 ngày (không kết luận thắng/thua).
+- **Mục tiêu "Tăng đơn hàng"** → AI chuyển sang **conversion mode**: phân biệt sản phẩm kéo click vs dễ ra đơn vs hoa hồng cao cần warming vs không nên ưu tiên; hook tăng ý định mua; CTA chốt deal; lịch phục vụ chuyển đổi.
+- **Form** có thêm: *Mục tiêu chi tiết* (ưu tiên của bạn), *Mức độ cụ thể* (Nhanh/Chi tiết/Rất chi tiết), *Chế độ chiến lược* (Test an toàn / Đẩy SP thắng / Tìm SP mới / Tăng đơn / Tăng hoa hồng / Kéo tương tác).
+- **Output** (xem trang chi tiết): executive summary, chẩn đoán thị trường (insight có evidence), chẩn đoán dữ liệu nội bộ, bảng quyết định sản phẩm (PUSH/TEST/HOLD/AVOID), **sản phẩm nên đi tìm link** (kèm từ khóa search Shopee), kế hoạch 7 ngày (hook/CTA/comment/why), engagement system, creative brief, measurement plan, rủi ro, next actions.
+- **products_to_source** là gợi ý để bạn **tự tìm link affiliate** (AI không bịa link/giá); chưa dùng được trong campaign cho đến khi bạn import link.
+- **Quality checker** đánh dấu kế hoạch còn chung chung (thiếu hook/CTA/reason/measurement…) bằng box cảnh báo.
+- Vẫn **chỉ gợi ý** — cần bạn Duyệt; không tự tạo campaign/đăng bài.
+
 ## 10. Deploy lên Vercel
 
 Trước khi deploy, chạy `npm run check:env` và `npm run build` để chắc chắn không

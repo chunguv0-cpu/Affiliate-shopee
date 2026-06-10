@@ -41,7 +41,14 @@ export function generateResearchQueries(input: QueryGenInput): string[] {
   } else if (input.goal === "commission") {
     add("nhóm sản phẩm affiliate shopee hoa hồng cao bán chạy");
   } else if (input.goal === "orders") {
-    add("sản phẩm shopee dễ chốt đơn khi có deal");
+    // Tập trung chuyển đổi / dễ ra đơn (Phase 13.2).
+    add("sản phẩm dễ mua online thiết yếu shopee");
+    add("đồ gia dụng thiết yếu nên mua lại online");
+    add("sản phẩm mẹ bỉm mua nhiều trên shopee");
+    add("cách viết bài affiliate tăng đơn hàng facebook");
+    add("sản phẩm dưới 99k dễ mua shopee");
+    add("mặt hàng tiêu dùng mua lặp lại online");
+    add("câu hỏi khiến người mua ra quyết định mua hàng");
   } else if (input.goal === "clicks") {
     add("tiêu đề kéo click bài affiliate facebook");
   }

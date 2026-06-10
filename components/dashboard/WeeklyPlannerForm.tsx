@@ -47,6 +47,19 @@ export default function WeeklyPlannerForm({
       goal: (String(fd.get("goal") ?? "balanced") as CampaignGoal),
       target_customer: String(fd.get("target_customer") ?? ""),
       notes: String(fd.get("notes") ?? ""),
+      priority_notes: String(fd.get("priority_notes") ?? ""),
+      detail_level: String(fd.get("detail_level") ?? "very_detailed") as
+        | "quick"
+        | "detailed"
+        | "very_detailed",
+      strategy_mode: (String(fd.get("strategy_mode") ?? "") || undefined) as
+        | "safe_test"
+        | "push_winners"
+        | "find_new"
+        | "boost_orders"
+        | "boost_commission"
+        | "boost_engagement"
+        | undefined,
       use_market_research: fd.get("use_market_research") === "true",
     };
 
@@ -99,6 +112,42 @@ export default function WeeklyPlannerForm({
         <div className="sm:col-span-2">
           <label className={labelClass} htmlFor="notes">Ghi chú thêm</label>
           <input id="notes" name="notes" type="text" placeholder="(tùy chọn)" className={inputClass} />
+        </div>
+      </div>
+
+      <div>
+        <label className={labelClass} htmlFor="priority_notes">
+          Mục tiêu chi tiết — Bạn muốn AI ưu tiên điều gì?
+        </label>
+        <textarea
+          id="priority_notes"
+          name="priority_notes"
+          rows={2}
+          placeholder="Ví dụ: Tôi muốn tăng đơn hàng, ưu tiên sản phẩm dễ mua, giá tốt, không chỉ kéo click ảo."
+          className={inputClass}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label className={labelClass} htmlFor="detail_level">Mức độ cụ thể</label>
+          <select id="detail_level" name="detail_level" defaultValue="very_detailed" className={inputClass}>
+            <option value="quick">Nhanh gọn</option>
+            <option value="detailed">Chi tiết</option>
+            <option value="very_detailed">Rất chi tiết</option>
+          </select>
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="strategy_mode">Chế độ chiến lược</label>
+          <select id="strategy_mode" name="strategy_mode" defaultValue="" className={inputClass}>
+            <option value="">(Theo mục tiêu)</option>
+            <option value="safe_test">Test an toàn</option>
+            <option value="push_winners">Đẩy mạnh sản phẩm thắng</option>
+            <option value="find_new">Tìm sản phẩm mới</option>
+            <option value="boost_orders">Tăng đơn hàng</option>
+            <option value="boost_commission">Tăng hoa hồng</option>
+            <option value="boost_engagement">Kéo tương tác</option>
+          </select>
         </div>
       </div>
 

@@ -175,6 +175,18 @@ export type AICampaignRecommendation = {
   creative_directions: unknown;
   suggested_new_products: unknown;
   market_research: unknown;
+  executive_summary?: string | null;
+  market_diagnosis?: unknown;
+  internal_data_diagnosis?: unknown;
+  goal_strategy?: unknown;
+  product_decision_table?: unknown;
+  products_to_source?: unknown;
+  weekly_execution_plan?: unknown;
+  engagement_system?: unknown;
+  creative_brief?: unknown;
+  measurement_plan?: unknown;
+  next_actions?: unknown;
+  quality_warnings?: unknown;
   created_at: string;
   updated_at: string;
 };
