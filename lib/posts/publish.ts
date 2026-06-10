@@ -1,9 +1,13 @@
 import "server-only";
 
-import { publishPhotoToFacebookPage, publishToFacebookPage } from "@/lib/facebook/client";
+import {
+  publishPhotoAlbumToFacebookPage,
+  publishPhotoToFacebookPage,
+  publishToFacebookPage,
+} from "@/lib/facebook/client";
 import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import type { FacebookPublishType, GeneratedPostStatus } from "@/lib/types";
+import type { FacebookPublishType, GeneratedPostStatus, PublishMode } from "@/lib/types";
 
 /** Nguồn gọi publish: thủ công (nút) hay tự động (cron). */
 export type PublishSource = "MANUAL" | "CRON";
@@ -45,7 +49,7 @@ export async function publishGeneratedPostById(
     const { data, error } = await supabase
       .from("generated_posts")
       .select(
-        "id, caption, status, should_publish, ai_score, creative_status, creative_image_url, facebook_publish_type, products(affiliate_link)",
+        "id, caption, status, should_publish, ai_score, creative_status, creative_image_url, facebook_publish_type, publish_mode, creative_pack_status, products(affiliate_link)",
       )
       .eq("id", postId)
       .single();
@@ -63,6 +67,8 @@ export async function publishGeneratedPostById(
       creative_status: string | null;
       creative_image_url: string | null;
       facebook_publish_type: string | null;
+      publish_mode: string | null;
+      creative_pack_status: string | null;
       products:
         | { affiliate_link: string | null }
         | { affiliate_link: string | null }[]
@@ -70,14 +76,23 @@ export async function publishGeneratedPostById(
     };
     // Bài cũ không có trường này -> mặc định FEED (text-only) để tương thích ngược.
     const publishType = (row.facebook_publish_type ?? "FEED") as FacebookPublishType;
+    const publishMode = (row.publish_mode ?? "FEED") as PublishMode;
+    // Loại đăng hiệu lực: ưu tiên PHOTO_ALBUM (V2) > PHOTO đơn (V1) > FEED.
+    const effective: "ALBUM" | "PHOTO" | "FEED" | "VIDEO" =
+      publishMode === "VIDEO" || publishType === "VIDEO"
+        ? "VIDEO"
+        : publishMode === "PHOTO_ALBUM"
+          ? "ALBUM"
+          : publishType === "PHOTO"
+            ? "PHOTO"
+            : "FEED";
+    const suffix = source === "CRON" ? "CRON" : "MANUAL";
     const logAction =
-      publishType === "PHOTO"
-        ? source === "CRON"
-          ? "PUBLISH_FACEBOOK_PHOTO_CRON"
-          : "PUBLISH_FACEBOOK_PHOTO_MANUAL"
-        : source === "CRON"
-          ? "PUBLISH_FACEBOOK_FEED_CRON"
-          : "PUBLISH_FACEBOOK_FEED_MANUAL";
+      effective === "ALBUM"
+        ? `PUBLISH_FACEBOOK_PHOTO_ALBUM_${suffix}`
+        : effective === "PHOTO"
+          ? `PUBLISH_FACEBOOK_PHOTO_${suffix}`
+          : `PUBLISH_FACEBOOK_FEED_${suffix}`;
 
     // 2) Kiểm tra điều kiện được phép đăng.
     if (row.status !== "READY") {
@@ -124,36 +139,63 @@ export async function publishGeneratedPostById(
       };
     }
 
-    // 3b) Kiểm tra điều kiện theo loại đăng (Phase 17). KHÔNG fallback ảnh -> text.
-    if (publishType === "VIDEO") {
+    // 3b) Kiểm tra điều kiện theo loại đăng. KHÔNG fallback ảnh -> text.
+    const failPost = async (msg: string, action: string) => {
+      await supabase
+        .from("generated_posts")
+        .update({ status: "FAILED", error_log: msg, creative_error: msg, updated_at: new Date().toISOString() })
+        .eq("id", postId);
+      await insertPostingLog(supabase, postId, action, "FAILED", msg, null);
+    };
+
+    if (effective === "VIDEO") {
       const msg = "Phase 17 chưa hỗ trợ đăng VIDEO.";
-      await supabase
-        .from("generated_posts")
-        .update({ status: "FAILED", error_log: msg, updated_at: new Date().toISOString() })
-        .eq("id", postId);
-      await insertPostingLog(supabase, postId, logAction, "FAILED", msg, null);
-      return { ok: false, error: msg };
-    }
-    if (publishType === "PHOTO" && (row.creative_status !== "READY" || !row.creative_image_url)) {
-      const msg = "Bài ảnh thiếu asset (creative_status != READY hoặc không có ảnh).";
-      await supabase
-        .from("generated_posts")
-        .update({ status: "FAILED", error_log: msg, updated_at: new Date().toISOString() })
-        .eq("id", postId);
-      await insertPostingLog(supabase, postId, "CREATIVE_MISSING_ASSET", "FAILED", msg, null);
+      await failPost(msg, logAction);
       return { ok: false, error: msg };
     }
 
-    // 4) Gọi Facebook Graph API (PHOTO hoặc FEED).
+    // Chuẩn bị ảnh cho ALBUM.
+    let albumUrls: string[] = [];
+    if (effective === "ALBUM") {
+      if (row.creative_pack_status !== "READY") {
+        const msg = "Pack ảnh chưa READY — không đủ điều kiện đăng album.";
+        await failPost(msg, "PUBLISH_FACEBOOK_PHOTO_ALBUM_FAILED");
+        return { ok: false, error: msg };
+      }
+      const { data: assetRows } = await supabase
+        .from("post_creative_assets")
+        .select("image_url, sort_order, status")
+        .eq("generated_post_id", postId)
+        .eq("status", "READY")
+        .order("sort_order", { ascending: true });
+      albumUrls = ((assetRows ?? []) as Array<{ image_url: string | null }>)
+        .map((a) => (a.image_url ?? "").trim())
+        .filter((u) => /^https?:\/\//i.test(u));
+      if (albumUrls.length < 4) {
+        const msg = `Album cần >= 4 ảnh nhưng chỉ có ${albumUrls.length}.`;
+        await failPost(msg, "PUBLISH_FACEBOOK_PHOTO_ALBUM_FAILED");
+        return { ok: false, error: msg };
+      }
+    }
+
+    if (effective === "PHOTO" && (row.creative_status !== "READY" || !row.creative_image_url)) {
+      const msg = "Bài ảnh thiếu asset (creative_status != READY hoặc không có ảnh).";
+      await failPost(msg, "CREATIVE_MISSING_ASSET");
+      return { ok: false, error: msg };
+    }
+
+    // 4) Gọi Facebook Graph API (ALBUM / PHOTO / FEED).
     try {
       const result =
-        publishType === "PHOTO"
-          ? await publishPhotoToFacebookPage({
-              imageUrl: row.creative_image_url as string,
-              caption,
-              affiliateLink,
-            })
-          : await publishToFacebookPage({ caption, affiliateLink });
+        effective === "ALBUM"
+          ? await publishPhotoAlbumToFacebookPage({ imageUrls: albumUrls, caption, affiliateLink })
+          : effective === "PHOTO"
+            ? await publishPhotoToFacebookPage({
+                imageUrl: row.creative_image_url as string,
+                caption,
+                affiliateLink,
+              })
+            : await publishToFacebookPage({ caption, affiliateLink });
 
       await supabase
         .from("generated_posts")
@@ -195,14 +237,13 @@ export async function publishGeneratedPostById(
         })
         .eq("id", postId);
 
-      await insertPostingLog(
-        supabase,
-        postId,
-        publishType === "PHOTO" ? "PUBLISH_FACEBOOK_PHOTO_FAILED" : logAction,
-        "FAILED",
-        message,
-        { error: message },
-      );
+      const failAction =
+        effective === "ALBUM"
+          ? "PUBLISH_FACEBOOK_PHOTO_ALBUM_FAILED"
+          : effective === "PHOTO"
+            ? "PUBLISH_FACEBOOK_PHOTO_FAILED"
+            : logAction;
+      await insertPostingLog(supabase, postId, failAction, "FAILED", message, { error: message });
 
       return { ok: false, error: message };
     }

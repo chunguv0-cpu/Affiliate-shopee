@@ -3,7 +3,11 @@ import PostStatusBadge from "@/components/dashboard/PostStatusBadge";
 import PublishPostButton from "@/components/dashboard/PublishPostButton";
 import RetryPostButton from "@/components/dashboard/RetryPostButton";
 import SchedulePostForm from "@/components/dashboard/SchedulePostForm";
-import { CREATIVE_STATUS_LABELS, type GeneratedPost } from "@/lib/types";
+import {
+  CREATIVE_PACK_STATUS_LABELS,
+  CREATIVE_STATUS_LABELS,
+  type GeneratedPost,
+} from "@/lib/types";
 import { formatDateTimeVi, isDue } from "@/lib/utils/date";
 
 /** Định dạng ngày dạng dd/MM/yyyy (tránh lệch locale). */
@@ -61,6 +65,8 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
   const productName = post.products?.product_name ?? "Sản phẩm không xác định";
   const affiliateLink = post.products?.affiliate_link ?? null;
   const stateLabel = scheduleStateLabel(post);
+  const creativeAssets = post.creative_assets ?? [];
+  const readyAssetCount = creativeAssets.filter((a) => a.status === "READY" && a.image_url).length;
 
   return (
     <article className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -127,6 +133,52 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
 
       {/* Body */}
       <div className="space-y-4 px-5 py-4">
+        {/* Phase 17 V2 — Creative pack (gallery >= 4 ảnh) */}
+        {creativeAssets.length > 0 ? (
+          <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                {post.publish_mode ?? "FEED"}
+              </span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                  post.creative_pack_status === "READY"
+                    ? "bg-green-50 text-green-700"
+                    : post.creative_pack_status === "FAILED"
+                      ? "bg-red-100 text-red-700"
+                      : "bg-amber-50 text-amber-700"
+                }`}
+              >
+                {post.creative_pack_status ? CREATIVE_PACK_STATUS_LABELS[post.creative_pack_status] : "—"}
+              </span>
+              <span className="text-xs text-gray-500">
+                {readyAssetCount} ảnh{post.creative_pack_mode ? ` · ${post.creative_pack_mode}` : ""}
+              </span>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {creativeAssets.slice(0, 4).map((a, i) =>
+                a.image_url ? (
+                  <div key={i} className="relative">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={a.image_url} alt="" className="aspect-square w-full rounded-md border border-gray-200 object-cover" />
+                    <span className="absolute bottom-0.5 left-0.5 rounded bg-black/55 px-1 text-[10px] font-medium text-white">
+                      {a.source_type === "PRODUCT" ? "Sản phẩm" : a.source_type === "FOUND" ? "Tìm" : "AI"}
+                    </span>
+                  </div>
+                ) : (
+                  <div key={i} className="flex aspect-square w-full items-center justify-center rounded-md border border-dashed border-gray-300 text-gray-300">×</div>
+                ),
+              )}
+            </div>
+            {readyAssetCount < 4 ? (
+              <p className="mt-2 text-xs font-medium text-amber-700">⚠ Chưa đủ 4 ảnh</p>
+            ) : null}
+            {post.creative_pack_status === "FAILED" ? (
+              <p className="mt-2 text-xs font-medium text-red-700">Creative failed{post.creative_error ? `: ${post.creative_error}` : ""}</p>
+            ) : null}
+          </div>
+        ) : null}
+
         {/* Phase 17 — Creative (ảnh + hook + loại đăng) */}
         {post.creative_image_url || post.creative_hook || post.creative_type ? (
           <div className="flex gap-3 rounded-lg border border-gray-100 bg-gray-50/50 p-3">

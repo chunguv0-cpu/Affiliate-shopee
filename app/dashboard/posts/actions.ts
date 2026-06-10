@@ -8,6 +8,7 @@ import {
   type GeneratedCaptionResult,
   type ProductInput,
 } from "@/lib/ai/client";
+import { buildCreativePackForPost } from "@/lib/creative/pack";
 import { buildCreativeFields } from "@/lib/posts/creative";
 import { insertPostingLog } from "@/lib/posts/log";
 import { publishGeneratedPostById } from "@/lib/posts/publish";
@@ -59,6 +60,37 @@ const RETRY_ACTION = "RETRY_FAILED_POST";
 
 /** Trạng thái được phép lên lịch. */
 const SCHEDULABLE_STATUSES: GeneratedPostStatus[] = ["READY", "SKIPPED", "FAILED"];
+
+/** Đính kèm creative_assets (rút gọn) vào danh sách bài (Phase 17 V2). Không throw. */
+async function attachCreativeAssets(
+  supabase: SupabaseClient,
+  posts: GeneratedPost[],
+): Promise<void> {
+  const ids = posts.map((p) => p.id);
+  if (ids.length === 0) return;
+  try {
+    const { data } = await supabase
+      .from("post_creative_assets")
+      .select("generated_post_id, image_url, source_type, sort_order, status")
+      .in("generated_post_id", ids)
+      .order("sort_order", { ascending: true });
+    const byPost = new Map<string, GeneratedPost["creative_assets"]>();
+    for (const a of (data ?? []) as Array<Record<string, unknown>>) {
+      const pid = String(a.generated_post_id);
+      const list = byPost.get(pid) ?? [];
+      list!.push({
+        image_url: (a.image_url as string | null) ?? null,
+        source_type: (a.source_type as "PRODUCT" | "FOUND" | "AI_GENERATED") ?? "AI_GENERATED",
+        sort_order: typeof a.sort_order === "number" ? a.sort_order : 0,
+        status: String(a.status ?? "READY"),
+      });
+      byPost.set(pid, list);
+    }
+    for (const p of posts) p.creative_assets = byPost.get(p.id) ?? [];
+  } catch {
+    /* bảng chưa tồn tại / lỗi -> bỏ qua */
+  }
+}
 
 /**
  * Tạo bài AI từ một sản phẩm đã lưu, lưu vào generated_posts và ghi log.
@@ -165,6 +197,11 @@ export async function generatePostFromProduct(
       result,
     );
 
+    // 6) Phase 17 V2 — dựng pack >= 4 ảnh cho bài READY.
+    if (status === "READY") {
+      await buildCreativePackForPost(supabase, postId, product, result);
+    }
+
     revalidatePath("/dashboard/products");
     revalidatePath("/dashboard/posts");
 
@@ -199,7 +236,9 @@ export async function getGeneratedPosts(): Promise<GeneratedPostsResult> {
       return { ok: false, error: `Không tải được danh sách bài AI: ${error.message}` };
     }
 
-    return { ok: true, posts: (data ?? []) as GeneratedPost[] };
+    const posts = (data ?? []) as GeneratedPost[];
+    await attachCreativeAssets(supabase, posts);
+    return { ok: true, posts };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Lỗi không xác định.";
     return { ok: false, error: `Không kết nối được cơ sở dữ liệu: ${message}` };
@@ -430,7 +469,9 @@ export async function getScheduledPosts(): Promise<GeneratedPostsResult> {
       return { ok: false, error: `Không tải được lịch đăng: ${error.message}` };
     }
 
-    return { ok: true, posts: (data ?? []) as GeneratedPost[] };
+    const posts = (data ?? []) as GeneratedPost[];
+    await attachCreativeAssets(supabase, posts);
+    return { ok: true, posts };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Lỗi không xác định.";
     return { ok: false, error: `Không kết nối được cơ sở dữ liệu: ${message}` };

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import type { CampaignGoal, PlannerProduct } from "@/lib/ai/campaign-planner";
 import { generateAffiliateCaption, type ProductInput } from "@/lib/ai/client";
 import { normalizeCampaignPlan } from "@/lib/ai/normalize-campaign-plan";
+import { buildCreativePackForPost } from "@/lib/creative/pack";
 import { buildCreativeFields } from "@/lib/posts/creative";
 import { validateCampaignPlanQuality } from "@/lib/ai/plan-quality-checker";
 import {
@@ -1202,25 +1203,31 @@ export async function convertAiRecommendationToCampaign(
         const status: GeneratedPostStatus =
           result.score >= 80 && result.should_publish === true ? "READY" : "REJECTED";
         const creative = buildCreativeFields(product.image_url, result);
-        const { error: insErr } = await supabase.from("generated_posts").insert({
-          product_id: product.id,
-          campaign_id: campaignId,
-          caption: result.caption,
-          hook: result.hook,
-          ai_score: result.score,
-          safety_notes: result.safety_notes,
-          should_publish: result.should_publish,
-          status,
-          scheduled_at: scheduledAt,
-          content_angle_variant: angle,
-          ...creative,
-        });
-        if (insErr) {
+        const { data: insertedPost, error: insErr } = await supabase
+          .from("generated_posts")
+          .insert({
+            product_id: product.id,
+            campaign_id: campaignId,
+            caption: result.caption,
+            hook: result.hook,
+            ai_score: result.score,
+            safety_notes: result.safety_notes,
+            should_publish: result.should_publish,
+            status,
+            scheduled_at: scheduledAt,
+            content_angle_variant: angle,
+            ...creative,
+          })
+          .select("id")
+          .single();
+        if (insErr || !insertedPost) {
           failedPosts += 1;
           continue;
         }
-        if (status === "READY") createdPosts += 1;
-        else rejectedPosts += 1;
+        if (status === "READY") {
+          createdPosts += 1;
+          await buildCreativePackForPost(supabase, insertedPost.id as string, product, result);
+        } else rejectedPosts += 1;
       } catch {
         failedPosts += 1;
         await supabase.from("generated_posts").insert({

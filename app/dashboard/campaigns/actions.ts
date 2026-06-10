@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { generateAffiliateCaption, type ProductInput } from "@/lib/ai/client";
+import { buildCreativePackForPost } from "@/lib/creative/pack";
 import { buildCreativeFields } from "@/lib/posts/creative";
 import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -313,6 +314,11 @@ export async function createCampaignAndSchedulePosts(
             : `Sản phẩm thiếu ảnh — bài đăng dạng TEXT_ONLY/FEED.`,
           { campaign_id: campaignId },
         );
+
+        // Phase 17 V2 — dựng pack >= 4 ảnh cho bài READY.
+        if (status === "READY") {
+          await buildCreativePackForPost(supabase, inserted.id as string, product, result);
+        }
       } catch (err) {
         // Lỗi AI cho 1 sản phẩm: ghi bài FAILED + log, KHÔNG dừng cả chiến dịch.
         failedPosts += 1;

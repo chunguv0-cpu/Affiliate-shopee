@@ -102,6 +102,13 @@ create table if not exists generated_posts (
   creative_brief        text,
   creative_status       text default 'PENDING',
   facebook_publish_type text default 'FEED',
+  -- Phase 17 V2: multi-image creative pack
+  creative_pack_status  text default 'PENDING',
+  creative_pack_mode    text default 'AUTO',
+  creative_min_assets   integer default 4,
+  publish_mode          text default 'FEED',
+  creative_summary      text,
+  creative_error        text,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   constraint generated_posts_status_check
@@ -111,8 +118,44 @@ create table if not exists generated_posts (
   constraint generated_posts_creative_status_check
     check (creative_status in ('PENDING', 'READY', 'MISSING_ASSET', 'FAILED')),
   constraint generated_posts_fb_publish_type_check
-    check (facebook_publish_type in ('FEED', 'PHOTO', 'VIDEO'))
+    check (facebook_publish_type in ('FEED', 'PHOTO', 'VIDEO')),
+  constraint generated_posts_creative_pack_status_check
+    check (creative_pack_status in ('PENDING', 'READY', 'PARTIAL', 'FAILED')),
+  constraint generated_posts_creative_pack_mode_check
+    check (creative_pack_mode in ('AUTO', 'FOUND_ONLY', 'GENERATED_ONLY', 'MIXED')),
+  constraint generated_posts_publish_mode_check
+    check (publish_mode in ('FEED', 'PHOTO_ALBUM', 'VIDEO'))
 );
+
+-- Phase 17 V2: bảng asset ảnh của bài.
+create table if not exists post_creative_assets (
+  id                uuid primary key default gen_random_uuid(),
+  generated_post_id uuid not null references generated_posts (id) on delete cascade,
+  asset_type        text default 'IMAGE',
+  source_type       text not null,
+  image_url         text,
+  local_path        text,
+  prompt            text,
+  caption_overlay   text,
+  sort_order        integer default 0,
+  status            text default 'READY',
+  width             integer,
+  height            integer,
+  metadata          jsonb default '{}'::jsonb,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  constraint post_creative_assets_asset_type_check check (asset_type in ('IMAGE')),
+  constraint post_creative_assets_source_type_check check (source_type in ('PRODUCT', 'FOUND', 'AI_GENERATED')),
+  constraint post_creative_assets_status_check check (status in ('READY', 'FAILED'))
+);
+create index if not exists idx_pca_post       on post_creative_assets (generated_post_id);
+create index if not exists idx_pca_sort_order  on post_creative_assets (sort_order);
+create index if not exists idx_pca_source_type on post_creative_assets (source_type);
+drop trigger if exists trg_pca_updated_at on post_creative_assets;
+create trigger trg_pca_updated_at
+  before update on post_creative_assets
+  for each row
+  execute function update_updated_at_column();
 
 create index if not exists idx_generated_posts_product_id   on generated_posts (product_id);
 create index if not exists idx_generated_posts_campaign_id  on generated_posts (campaign_id);

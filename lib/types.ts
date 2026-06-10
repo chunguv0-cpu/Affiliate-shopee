@@ -100,6 +100,45 @@ export const CREATIVE_STATUS_LABELS: Record<CreativeStatus, string> = {
   FAILED: "Lỗi ảnh",
 };
 
+// Phase 17 V2 — multi-image creative pack.
+export type CreativePackStatus = "PENDING" | "READY" | "PARTIAL" | "FAILED";
+export type CreativePackMode = "AUTO" | "FOUND_ONLY" | "GENERATED_ONLY" | "MIXED";
+export type PublishMode = "FEED" | "PHOTO_ALBUM" | "VIDEO";
+export type CreativeAssetSource = "PRODUCT" | "FOUND" | "AI_GENERATED";
+
+export const CREATIVE_PACK_STATUS_LABELS: Record<CreativePackStatus, string> = {
+  PENDING: "Chưa dựng",
+  READY: "Đủ ảnh",
+  PARTIAL: "Chưa đủ ảnh",
+  FAILED: "Lỗi dựng ảnh",
+};
+
+export type PostCreativeAsset = {
+  id: string;
+  generated_post_id: string;
+  asset_type: string;
+  source_type: CreativeAssetSource;
+  image_url: string | null;
+  local_path: string | null;
+  prompt: string | null;
+  caption_overlay: string | null;
+  sort_order: number;
+  status: "READY" | "FAILED";
+  width: number | null;
+  height: number | null;
+  metadata: unknown;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Asset rút gọn đính kèm vào GeneratedPost cho UI. */
+export type CreativeAssetLite = {
+  image_url: string | null;
+  source_type: CreativeAssetSource;
+  sort_order: number;
+  status: string;
+};
+
 export type GeneratedPost = {
   id: string;
   product_id: string;
@@ -123,6 +162,14 @@ export type GeneratedPost = {
   creative_brief?: string | null;
   creative_status?: CreativeStatus | null;
   facebook_publish_type?: FacebookPublishType | null;
+  // Phase 17 V2: multi-image creative pack
+  creative_pack_status?: CreativePackStatus | null;
+  creative_pack_mode?: CreativePackMode | null;
+  creative_min_assets?: number | null;
+  publish_mode?: PublishMode | null;
+  creative_summary?: string | null;
+  creative_error?: string | null;
+  creative_assets?: CreativeAssetLite[];
   created_at: string;
   updated_at: string;
   products?: {

@@ -20,6 +20,11 @@ export type FacebookPhotoPublishInput = FacebookPublishInput & {
   imageUrl: string;
 };
 
+/** Dữ liệu đầu vào để đăng bài NHIỀU ẢNH (Phase 17 V2). */
+export type FacebookAlbumPublishInput = FacebookPublishInput & {
+  imageUrls: string[];
+};
+
 /** Kết quả trả về sau khi đăng bài. */
 export type FacebookPublishResult = {
   postId: string;
@@ -114,6 +119,112 @@ export async function publishToFacebookPage(
     postId,
     postUrl: `https://www.facebook.com/${postId}`,
     rawResponse: rawJson,
+  };
+}
+
+/** Đọc body JSON an toàn + ném lỗi tiếng Việt nếu Facebook từ chối. */
+async function readFbJson(response: Response, action: string): Promise<Record<string, unknown>> {
+  const rawText = await response.text();
+  let rawJson: unknown = rawText;
+  try {
+    rawJson = JSON.parse(rawText);
+  } catch {
+    /* giữ text */
+  }
+  if (!response.ok) {
+    let fbMessage = `HTTP ${response.status}`;
+    if (
+      rawJson &&
+      typeof rawJson === "object" &&
+      "error" in rawJson &&
+      typeof (rawJson as { error?: { message?: unknown } }).error?.message === "string"
+    ) {
+      fbMessage = (rawJson as { error: { message: string } }).error.message;
+    }
+    throw new Error(`Facebook từ chối ${action}: ${fbMessage}`);
+  }
+  return rawJson && typeof rawJson === "object" ? (rawJson as Record<string, unknown>) : {};
+}
+
+/**
+ * Đăng MỘT bài với NHIỀU ảnh (Phase 17 V2 — PHOTO_ALBUM).
+ * Bước 1: upload từng ảnh ở chế độ unpublished (published=false) -> lấy media_fbid.
+ * Bước 2: tạo 1 bài /feed với attached_media[] + message. KHÔNG đăng nhiều bài rời.
+ */
+export async function publishPhotoAlbumToFacebookPage(
+  input: FacebookAlbumPublishInput,
+): Promise<FacebookPublishResult> {
+  const pageId = process.env.FACEBOOK_PAGE_ID?.trim();
+  const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim();
+  if (!pageId || !accessToken) {
+    throw new Error("Thiếu FACEBOOK_PAGE_ID hoặc FACEBOOK_PAGE_ACCESS_TOKEN.");
+  }
+  const caption = input.caption?.trim();
+  if (!caption) throw new Error("Caption rỗng, không thể đăng.");
+
+  const urls = (input.imageUrls ?? []).map((u) => (u ?? "").trim()).filter((u) => /^https?:\/\//i.test(u));
+  if (urls.length < 2) {
+    throw new Error("Cần ít nhất 2 ảnh hợp lệ để đăng album.");
+  }
+
+  let message = caption;
+  const link = input.affiliateLink?.trim();
+  if (link && !message.includes(link)) message = `${message}\n\n${link}`;
+
+  const base = `https://graph.facebook.com/${GRAPH_API_VERSION}/${encodeURIComponent(pageId)}`;
+
+  // Bước 1: upload ảnh unpublished.
+  const mediaFbids: string[] = [];
+  for (const url of urls) {
+    let res: Response;
+    try {
+      const body = new URLSearchParams();
+      body.set("url", url);
+      body.set("published", "false");
+      body.set("access_token", accessToken);
+      res = await fetch(`${base}/photos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        cache: "no-store",
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "không rõ nguyên nhân";
+      throw new Error(`Không upload được ảnh: ${reason}`);
+    }
+    const json = await readFbJson(res, "upload ảnh");
+    const id = typeof json.id === "string" ? json.id : null;
+    if (!id) throw new Error("Facebook không trả về id ảnh khi upload.");
+    mediaFbids.push(id);
+  }
+
+  // Bước 2: tạo 1 bài feed đính kèm nhiều ảnh.
+  let feedRes: Response;
+  try {
+    const body = new URLSearchParams();
+    body.set("message", message);
+    body.set("access_token", accessToken);
+    mediaFbids.forEach((id, i) => {
+      body.set(`attached_media[${i}]`, JSON.stringify({ media_fbid: id }));
+    });
+    feedRes = await fetch(`${base}/feed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      cache: "no-store",
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "không rõ nguyên nhân";
+    throw new Error(`Không tạo được bài album: ${reason}`);
+  }
+  const feedJson = await readFbJson(feedRes, "đăng album");
+  const postId = typeof feedJson.id === "string" ? feedJson.id : null;
+  if (!postId) throw new Error("Facebook không trả về ID bài album.");
+
+  return {
+    postId,
+    postUrl: `https://www.facebook.com/${postId}`,
+    rawResponse: { post_id: postId, photo_count: mediaFbids.length },
   };
 }
 

@@ -11,13 +11,17 @@ export const dynamic = "force-dynamic";
 
 function ScheduledItem({ post }: { post: GeneratedPost }) {
   const due = isDue(post.scheduled_at);
+  const assets = post.creative_assets ?? [];
+  const readyCount = assets.filter((a) => a.status === "READY" && a.image_url).length;
+  const thumb = assets.find((a) => a.image_url)?.image_url ?? post.creative_image_url ?? null;
+  const mode = post.publish_mode ?? post.facebook_publish_type ?? "FEED";
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 gap-3">
-          {post.creative_image_url ? (
+          {thumb ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={post.creative_image_url} alt="" className="h-14 w-14 flex-none rounded-lg border border-gray-200 object-cover" />
+            <img src={thumb} alt="" className="h-14 w-14 flex-none rounded-lg border border-gray-200 object-cover" />
           ) : null}
           <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -29,11 +33,14 @@ function ScheduledItem({ post }: { post: GeneratedPost }) {
               🕒 {formatDateTimeVi(post.scheduled_at)}
             </span>
             <PostStatusBadge status={post.status} />
-            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
-              {post.facebook_publish_type ?? "FEED"}
-            </span>
-            {post.creative_status === "MISSING_ASSET" ? (
-              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">⚠ Thiếu ảnh</span>
+            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">{mode}</span>
+            {readyCount > 0 ? (
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">🖼️ {readyCount}</span>
+            ) : null}
+            {post.creative_pack_status === "PARTIAL" ? (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">⚠ Chưa đủ ảnh</span>
+            ) : post.creative_pack_status === "FAILED" ? (
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Lỗi ảnh</span>
             ) : null}
           </div>
           <p className="mt-2 font-medium text-gray-900">
