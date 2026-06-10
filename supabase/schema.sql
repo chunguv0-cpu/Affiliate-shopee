@@ -197,6 +197,7 @@ create table if not exists ai_campaign_recommendations (
   campaign_concept      jsonb,
   interaction_plan      jsonb default '[]'::jsonb,
   creative_directions   jsonb default '[]'::jsonb,
+  suggested_new_products jsonb default '[]'::jsonb,
   market_research       jsonb,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now(),

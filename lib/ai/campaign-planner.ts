@@ -62,6 +62,14 @@ export type CreativeItem = {
   idea: string;
   example_copy_direction: string;
 };
+/** Sản phẩm gợi ý NÊN TÌM THÊM (chưa có trong kho) để user tự tìm link. */
+export type SuggestedProduct = {
+  product_name: string;
+  category: string;
+  reason: string;
+  search_keyword: string;
+  why_now: string;
+};
 
 export type RecProduct = {
   product_id: string | null;
@@ -103,6 +111,7 @@ export type WeeklyPlanResult = {
   campaign_concept: CampaignConcept | null;
   interaction_plan: InteractionItem[];
   creative_directions: CreativeItem[];
+  suggested_new_products: SuggestedProduct[];
   raw_ai_response: unknown;
 };
 
@@ -140,9 +149,16 @@ CHỈ trả về JSON đúng schema (không thêm text ngoài JSON):
   "campaign_concept": {"big_idea":"","target_emotion":"","viral_mechanism":"","why_this_week":""},
   "interaction_plan": [{"post_type":"câu hỏi mở | list deal | review mềm | so sánh | checklist","comment_prompt":"","save_share_trigger":"","expected_behavior":"comment | click | lưu bài | inbox"}],
   "creative_directions": [{"format":"bài text | ảnh list | ảnh before-after | checklist | album","idea":"","example_copy_direction":""}],
+  "suggested_new_products": [{"product_name":"","category":"","reason":"","search_keyword":"","why_now":""}],
   "risks": [""],
   "ai_reasoning_summary": ""
-}`;
+}
+
+QUAN TRỌNG về suggested_new_products:
+- Đây là sản phẩm/nhóm sản phẩm NÊN TÌM THÊM (CHƯA có trong kho) để người dùng tự đi tìm link affiliate Shopee.
+- Dựa trên nghiên cứu thị trường + xu hướng + tệp khách; liên quan tới nhóm sản phẩm hiện có.
+- KHÔNG bịa link/giá cụ thể. Cung cấp "search_keyword" để người dùng tự search trên Shopee.
+- Đề xuất 3-7 mục.`;
 
 function buildUserPrompt(input: WeeklyPlanInput): string {
   const productLines = input.products
@@ -263,6 +279,22 @@ function mockPlan(input: WeeklyPlanInput): WeeklyPlanResult {
     ai_reasoning_summary: lowData
       ? "Mock: dữ liệu ít nên ưu tiên test sản phẩm hiện có với nhiều góc viết."
       : "Mock: ưu tiên sản phẩm có dữ liệu, phối góc viết theo mục tiêu.",
+    suggested_new_products: [
+      {
+        product_name: "Combo phụ kiện đi kèm sản phẩm chủ lực",
+        category: "Phụ kiện / cross-sell",
+        reason: "Tăng giá trị giỏ hàng và bài combo dễ kéo tương tác.",
+        search_keyword: "phụ kiện " + (top[0]?.product_name ?? "sản phẩm hằng ngày"),
+        why_now: "Tận dụng nhu cầu đang có của nhóm sản phẩm chủ lực.",
+      },
+      {
+        product_name: "Sản phẩm tiêu hao dùng hằng ngày",
+        category: "Đồ dùng gia đình",
+        reason: "Nhu cầu lặp lại, dễ chốt khi có deal, hợp bài 'mua dự trữ'.",
+        search_keyword: "đồ dùng gia đình tiện ích sale",
+        why_now: "Mùa sale, khách hay gom dự trữ.",
+      },
+    ],
     raw_ai_response: { mock: true },
   };
 }
@@ -361,6 +393,16 @@ function parsePlan(raw: string, input: WeeklyPlanInput): WeeklyPlanResult {
         format: str(r.format),
         idea: str(r.idea),
         example_copy_direction: str(r.example_copy_direction),
+      };
+    }),
+    suggested_new_products: asArray(obj.suggested_new_products).map((it) => {
+      const r = (it ?? {}) as Record<string, unknown>;
+      return {
+        product_name: str(r.product_name),
+        category: str(r.category),
+        reason: str(r.reason),
+        search_keyword: str(r.search_keyword),
+        why_now: str(r.why_now),
       };
     }),
     raw_ai_response: obj,

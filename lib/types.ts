@@ -173,6 +173,7 @@ export type AICampaignRecommendation = {
   campaign_concept: unknown;
   interaction_plan: unknown;
   creative_directions: unknown;
+  suggested_new_products: unknown;
   market_research: unknown;
   created_at: string;
   updated_at: string;

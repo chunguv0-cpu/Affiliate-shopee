@@ -414,6 +414,7 @@ export async function generateWeeklyCampaignRecommendation(
         campaign_concept: plan.campaign_concept,
         interaction_plan: plan.interaction_plan,
         creative_directions: plan.creative_directions,
+        suggested_new_products: plan.suggested_new_products,
         market_research: research,
       })
       .select("id")

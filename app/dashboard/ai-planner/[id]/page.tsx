@@ -16,6 +16,7 @@ import type {
   RecHook,
   RecProduct,
   RecScheduleItem,
+  SuggestedProduct,
 } from "@/lib/ai/campaign-planner";
 import type { MarketResearchInsights } from "@/lib/research/research-summarizer";
 
@@ -56,6 +57,7 @@ export default async function RecommendationDetailPage({
   const risks = arr<string>(rec.risks);
   const interaction = arr<InteractionItem>(rec.interaction_plan);
   const creative = arr<CreativeItem>(rec.creative_directions);
+  const suggested = arr<SuggestedProduct>(rec.suggested_new_products);
   const concept = (rec.campaign_concept ?? null) as CampaignConcept | null;
   const mr = (rec.market_research ?? null) as MarketResearchInsights | null;
   const sources = rec.research_run_id ? await getResearchSources(rec.research_run_id) : [];
@@ -125,6 +127,37 @@ export default async function RecommendationDetailPage({
             </div>
           )}
         </Section>
+
+        {/* Sản phẩm nên tìm thêm */}
+        {suggested.length > 0 ? (
+          <Section title="Sản phẩm nên tìm thêm (đi tìm link affiliate)">
+            <p className="mb-3 text-xs text-gray-400">
+              Gợi ý từ nghiên cứu thị trường — <strong>chưa có trong kho</strong>. Bấm để tìm trên Shopee, chuyển link affiliate rồi import.
+            </p>
+            <div className="space-y-3">
+              {suggested.map((s, i) => (
+                <div key={i} className="rounded-lg border border-gray-200 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-gray-900">{s.product_name}</span>
+                    {s.category ? <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{s.category}</span> : null}
+                  </div>
+                  {s.reason ? <p className="mt-1 text-sm text-gray-600">{s.reason}</p> : null}
+                  {s.why_now ? <p className="mt-1 text-xs text-gray-500">Vì sao tuần này: {s.why_now}</p> : null}
+                  {s.search_keyword ? (
+                    <a
+                      href={`https://shopee.vn/search?keyword=${encodeURIComponent(s.search_keyword)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 inline-block text-xs font-medium text-blue-600 hover:underline"
+                    >
+                      🔎 Tìm “{s.search_keyword}” trên Shopee →
+                    </a>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </Section>
+        ) : null}
 
         {/* Lịch đề xuất */}
         <Section title="Lịch đề xuất">
