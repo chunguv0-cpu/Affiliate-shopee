@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import type { CampaignGoal, PlannerProduct } from "@/lib/ai/campaign-planner";
 import { generateAffiliateCaption, type ProductInput } from "@/lib/ai/client";
 import { normalizeCampaignPlan } from "@/lib/ai/normalize-campaign-plan";
+import { buildCreativeFields } from "@/lib/posts/creative";
 import { validateCampaignPlanQuality } from "@/lib/ai/plan-quality-checker";
 import {
   generateProductDiscovery,
@@ -1200,6 +1201,7 @@ export async function convertAiRecommendationToCampaign(
         const result = await generateAffiliateCaption(input);
         const status: GeneratedPostStatus =
           result.score >= 80 && result.should_publish === true ? "READY" : "REJECTED";
+        const creative = buildCreativeFields(product.image_url, result);
         const { error: insErr } = await supabase.from("generated_posts").insert({
           product_id: product.id,
           campaign_id: campaignId,
@@ -1211,6 +1213,7 @@ export async function convertAiRecommendationToCampaign(
           status,
           scheduled_at: scheduledAt,
           content_angle_variant: angle,
+          ...creative,
         });
         if (insErr) {
           failedPosts += 1;

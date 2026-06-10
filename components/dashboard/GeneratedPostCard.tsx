@@ -3,7 +3,7 @@ import PostStatusBadge from "@/components/dashboard/PostStatusBadge";
 import PublishPostButton from "@/components/dashboard/PublishPostButton";
 import RetryPostButton from "@/components/dashboard/RetryPostButton";
 import SchedulePostForm from "@/components/dashboard/SchedulePostForm";
-import type { GeneratedPost } from "@/lib/types";
+import { CREATIVE_STATUS_LABELS, type GeneratedPost } from "@/lib/types";
 import { formatDateTimeVi, isDue } from "@/lib/utils/date";
 
 /** Định dạng ngày dạng dd/MM/yyyy (tránh lệch locale). */
@@ -127,6 +127,37 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
 
       {/* Body */}
       <div className="space-y-4 px-5 py-4">
+        {/* Phase 17 — Creative (ảnh + hook + loại đăng) */}
+        {post.creative_image_url || post.creative_hook || post.creative_type ? (
+          <div className="flex gap-3 rounded-lg border border-gray-100 bg-gray-50/50 p-3">
+            {post.creative_image_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={post.creative_image_url}
+                alt={productName}
+                className="h-20 w-20 flex-none rounded-lg border border-gray-200 object-cover"
+              />
+            ) : (
+              <div className="flex h-20 w-20 flex-none items-center justify-center rounded-lg border border-dashed border-gray-300 text-2xl text-gray-300">🖼️</div>
+            )}
+            <div className="min-w-0">
+              {post.creative_hook ? (
+                <p className="text-sm font-medium text-gray-900">🪝 {post.creative_hook}</p>
+              ) : null}
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{post.creative_type ?? "TEXT_ONLY"}</span>
+                <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs text-sky-700">{post.facebook_publish_type ?? "FEED"}</span>
+                {post.creative_status === "MISSING_ASSET" ? (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">⚠ Thiếu ảnh</span>
+                ) : post.creative_status ? (
+                  <span className="rounded-full bg-green-50 px-2 py-0.5 text-xs text-green-700">{CREATIVE_STATUS_LABELS[post.creative_status] ?? post.creative_status}</span>
+                ) : null}
+              </div>
+              {post.creative_brief ? <p className="mt-1 text-xs text-gray-500">{post.creative_brief}</p> : null}
+            </div>
+          </div>
+        ) : null}
+
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
             Hook

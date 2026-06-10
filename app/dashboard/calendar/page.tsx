@@ -14,8 +14,13 @@ function ScheduledItem({ post }: { post: GeneratedPost }) {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
+        <div className="flex min-w-0 gap-3">
+          {post.creative_image_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={post.creative_image_url} alt="" className="h-14 w-14 flex-none rounded-lg border border-gray-200 object-cover" />
+          ) : null}
+          <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
             <span
               className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium ${
                 due ? "bg-orange-50 text-orange-700" : "bg-green-50 text-green-700"
@@ -24,6 +29,12 @@ function ScheduledItem({ post }: { post: GeneratedPost }) {
               🕒 {formatDateTimeVi(post.scheduled_at)}
             </span>
             <PostStatusBadge status={post.status} />
+            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
+              {post.facebook_publish_type ?? "FEED"}
+            </span>
+            {post.creative_status === "MISSING_ASSET" ? (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">⚠ Thiếu ảnh</span>
+            ) : null}
           </div>
           <p className="mt-2 font-medium text-gray-900">
             {post.products?.product_name ?? "Sản phẩm không xác định"}
@@ -41,6 +52,7 @@ function ScheduledItem({ post }: { post: GeneratedPost }) {
           <p className="mt-1 line-clamp-2 text-sm text-gray-600">
             {post.caption ?? "—"}
           </p>
+          </div>
         </div>
 
         <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">

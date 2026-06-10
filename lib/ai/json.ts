@@ -66,5 +66,23 @@ export function safeParseAIJson(raw: string): GeneratedCaptionResult {
     score = 0;
   }
 
-  return { caption, hook, score, safety_notes, should_publish };
+  // Phase 17 — visual fields (an toàn, có default).
+  let visual_hook = typeof obj.visual_hook === "string" ? obj.visual_hook.trim() : "";
+  // Giới hạn ~8 từ để giữ ngắn gọn.
+  if (visual_hook) visual_hook = visual_hook.split(/\s+/).slice(0, 8).join(" ");
+  const creative_brief = typeof obj.creative_brief === "string" ? obj.creative_brief.trim() : "";
+  const sct = typeof obj.suggested_creative_type === "string" ? obj.suggested_creative_type.toUpperCase() : "";
+  const suggested_creative_type: GeneratedCaptionResult["suggested_creative_type"] =
+    sct === "IMAGE" || sct === "VIDEO" ? (sct as "IMAGE" | "VIDEO") : "TEXT_ONLY";
+
+  return {
+    caption,
+    hook,
+    score,
+    safety_notes,
+    should_publish,
+    visual_hook,
+    creative_brief,
+    suggested_creative_type,
+  };
 }

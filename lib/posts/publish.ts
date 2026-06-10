@@ -1,9 +1,9 @@
 import "server-only";
 
-import { publishToFacebookPage } from "@/lib/facebook/client";
+import { publishPhotoToFacebookPage, publishToFacebookPage } from "@/lib/facebook/client";
 import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import type { GeneratedPostStatus } from "@/lib/types";
+import type { FacebookPublishType, GeneratedPostStatus } from "@/lib/types";
 
 /** Nguồn gọi publish: thủ công (nút) hay tự động (cron). */
 export type PublishSource = "MANUAL" | "CRON";
@@ -32,9 +32,6 @@ export async function publishGeneratedPostById(
     return { ok: false, error: "Thiếu mã bài đăng." };
   }
 
-  const logAction =
-    source === "CRON" ? "PUBLISH_FACEBOOK_CRON" : "PUBLISH_FACEBOOK_MANUAL";
-
   let supabase;
   try {
     supabase = createSupabaseAdminClient();
@@ -44,10 +41,12 @@ export async function publishGeneratedPostById(
   }
 
   try {
-    // 1) Lấy bài + link affiliate của sản phẩm.
+    // 1) Lấy bài + link affiliate của sản phẩm + trường creative (Phase 17).
     const { data, error } = await supabase
       .from("generated_posts")
-      .select("id, caption, status, should_publish, ai_score, products(affiliate_link)")
+      .select(
+        "id, caption, status, should_publish, ai_score, creative_status, creative_image_url, facebook_publish_type, products(affiliate_link)",
+      )
       .eq("id", postId)
       .single();
 
@@ -61,11 +60,24 @@ export async function publishGeneratedPostById(
       status: GeneratedPostStatus;
       should_publish: boolean;
       ai_score: number | null;
+      creative_status: string | null;
+      creative_image_url: string | null;
+      facebook_publish_type: string | null;
       products:
         | { affiliate_link: string | null }
         | { affiliate_link: string | null }[]
         | null;
     };
+    // Bài cũ không có trường này -> mặc định FEED (text-only) để tương thích ngược.
+    const publishType = (row.facebook_publish_type ?? "FEED") as FacebookPublishType;
+    const logAction =
+      publishType === "PHOTO"
+        ? source === "CRON"
+          ? "PUBLISH_FACEBOOK_PHOTO_CRON"
+          : "PUBLISH_FACEBOOK_PHOTO_MANUAL"
+        : source === "CRON"
+          ? "PUBLISH_FACEBOOK_FEED_CRON"
+          : "PUBLISH_FACEBOOK_FEED_MANUAL";
 
     // 2) Kiểm tra điều kiện được phép đăng.
     if (row.status !== "READY") {
@@ -112,9 +124,36 @@ export async function publishGeneratedPostById(
       };
     }
 
-    // 4) Gọi Facebook Graph API.
+    // 3b) Kiểm tra điều kiện theo loại đăng (Phase 17). KHÔNG fallback ảnh -> text.
+    if (publishType === "VIDEO") {
+      const msg = "Phase 17 chưa hỗ trợ đăng VIDEO.";
+      await supabase
+        .from("generated_posts")
+        .update({ status: "FAILED", error_log: msg, updated_at: new Date().toISOString() })
+        .eq("id", postId);
+      await insertPostingLog(supabase, postId, logAction, "FAILED", msg, null);
+      return { ok: false, error: msg };
+    }
+    if (publishType === "PHOTO" && (row.creative_status !== "READY" || !row.creative_image_url)) {
+      const msg = "Bài ảnh thiếu asset (creative_status != READY hoặc không có ảnh).";
+      await supabase
+        .from("generated_posts")
+        .update({ status: "FAILED", error_log: msg, updated_at: new Date().toISOString() })
+        .eq("id", postId);
+      await insertPostingLog(supabase, postId, "CREATIVE_MISSING_ASSET", "FAILED", msg, null);
+      return { ok: false, error: msg };
+    }
+
+    // 4) Gọi Facebook Graph API (PHOTO hoặc FEED).
     try {
-      const result = await publishToFacebookPage({ caption, affiliateLink });
+      const result =
+        publishType === "PHOTO"
+          ? await publishPhotoToFacebookPage({
+              imageUrl: row.creative_image_url as string,
+              caption,
+              affiliateLink,
+            })
+          : await publishToFacebookPage({ caption, affiliateLink });
 
       await supabase
         .from("generated_posts")
@@ -156,9 +195,14 @@ export async function publishGeneratedPostById(
         })
         .eq("id", postId);
 
-      await insertPostingLog(supabase, postId, logAction, "FAILED", message, {
-        error: message,
-      });
+      await insertPostingLog(
+        supabase,
+        postId,
+        publishType === "PHOTO" ? "PUBLISH_FACEBOOK_PHOTO_FAILED" : logAction,
+        "FAILED",
+        message,
+        { error: message },
+      );
 
       return { ok: false, error: message };
     }

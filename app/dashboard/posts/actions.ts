@@ -8,6 +8,7 @@ import {
   type GeneratedCaptionResult,
   type ProductInput,
 } from "@/lib/ai/client";
+import { buildCreativeFields } from "@/lib/posts/creative";
 import { insertPostingLog } from "@/lib/posts/log";
 import { publishGeneratedPostById } from "@/lib/posts/publish";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -127,7 +128,8 @@ export async function generatePostFromProduct(
     const status: GeneratedPostStatus =
       result.score >= 80 && result.should_publish === true ? "READY" : "REJECTED";
 
-    // 4) Lưu vào generated_posts.
+    // 4) Lưu vào generated_posts (kèm trường creative — Phase 17).
+    const creative = buildCreativeFields(product.image_url, result);
     const { data: inserted, error: insertError } = await supabase
       .from("generated_posts")
       .insert({
@@ -138,6 +140,7 @@ export async function generatePostFromProduct(
         safety_notes: result.safety_notes,
         should_publish: result.should_publish,
         status,
+        ...creative,
       })
       .select("id")
       .single();

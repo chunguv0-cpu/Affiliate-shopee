@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { generateAffiliateCaption, type ProductInput } from "@/lib/ai/client";
+import { buildCreativeFields } from "@/lib/posts/creative";
 import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import {
@@ -257,6 +258,7 @@ export async function createCampaignAndSchedulePosts(
             ? "READY"
             : "REJECTED";
 
+        const creative = buildCreativeFields(product.image_url, result);
         const { data: inserted, error: insertError } = await supabase
           .from("generated_posts")
           .insert({
@@ -270,6 +272,7 @@ export async function createCampaignAndSchedulePosts(
             status,
             scheduled_at: scheduledAt,
             content_angle_variant: angle,
+            ...creative,
           })
           .select("id")
           .single();
@@ -297,6 +300,18 @@ export async function createCampaignAndSchedulePosts(
           "SUCCESS",
           `Đã tạo bài campaign với angle: ${angle ?? "(mặc định)"} (trạng thái: ${status}, điểm: ${result.score}).`,
           { campaign_id: campaignId, content_angle_variant: angle },
+        );
+
+        // Phase 17 — log creative.
+        await insertPostingLog(
+          supabase,
+          inserted.id as string,
+          creative.creative_type === "IMAGE" ? "CREATIVE_ASSIGNED" : "CREATIVE_MISSING_ASSET",
+          "SUCCESS",
+          creative.creative_type === "IMAGE"
+            ? `Gán ảnh sản phẩm cho bài (PHOTO).`
+            : `Sản phẩm thiếu ảnh — bài đăng dạng TEXT_ONLY/FEED.`,
+          { campaign_id: campaignId },
         );
       } catch (err) {
         // Lỗi AI cho 1 sản phẩm: ghi bài FAILED + log, KHÔNG dừng cả chiến dịch.

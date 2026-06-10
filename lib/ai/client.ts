@@ -42,6 +42,10 @@ export type GeneratedCaptionResult = {
   score: number;
   safety_notes: string;
   should_publish: boolean;
+  // Phase 17 — Visual Creative.
+  visual_hook: string;
+  creative_brief: string;
+  suggested_creative_type: "TEXT_ONLY" | "IMAGE" | "VIDEO";
 };
 
 /**
@@ -114,12 +118,24 @@ function mockGenerate(product: ProductInput): GeneratedCaptionResult {
     "Bài có gắn link tiếp thị liên kết.",
   );
 
+  const visualHooks: Record<string, string> = {
+    "Deal nhanh": "Săn deal đáng thử",
+    "Review thật": "Ai dùng rồi sẽ hiểu",
+    "Mua dự trữ": "Món nhỏ nhưng tiện",
+    "Combo kéo traffic": "Gom deal hôm nay",
+    "Story cá nhân": "Tự nhiên thấy thích",
+  };
+  const visual_hook = (variant && visualHooks[variant]) || "Món nhỏ nhưng tiện";
+
   return {
     caption: lines.join("\n"),
     hook,
     score: 85,
     safety_notes: "Mock mode: nội dung dùng để test local.",
     should_publish: true,
+    visual_hook,
+    creative_brief: `Ảnh thật sản phẩm "${name}", nền gọn, làm nổi bật công dụng. Tránh chữ quá nhiều trên ảnh.`,
+    suggested_creative_type: "IMAGE",
   };
 }
 

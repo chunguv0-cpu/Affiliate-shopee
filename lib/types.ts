@@ -88,6 +88,18 @@ export type GeneratedPostStatus =
   | "SKIPPED"
   | "PUBLISHING";
 
+// Phase 17 — Visual Creative Automation V1.
+export type CreativeType = "TEXT_ONLY" | "IMAGE" | "VIDEO";
+export type CreativeStatus = "PENDING" | "READY" | "MISSING_ASSET" | "FAILED";
+export type FacebookPublishType = "FEED" | "PHOTO" | "VIDEO";
+
+export const CREATIVE_STATUS_LABELS: Record<CreativeStatus, string> = {
+  PENDING: "Chưa gán",
+  READY: "Sẵn ảnh",
+  MISSING_ASSET: "Thiếu ảnh",
+  FAILED: "Lỗi ảnh",
+};
+
 export type GeneratedPost = {
   id: string;
   product_id: string;
@@ -104,6 +116,13 @@ export type GeneratedPost = {
   error_log: string | null;
   campaign_id: string | null;
   content_angle_variant: string | null;
+  // Phase 17: Visual Creative Automation V1
+  creative_type?: CreativeType | null;
+  creative_image_url?: string | null;
+  creative_hook?: string | null;
+  creative_brief?: string | null;
+  creative_status?: CreativeStatus | null;
+  facebook_publish_type?: FacebookPublishType | null;
   created_at: string;
   updated_at: string;
   products?: {

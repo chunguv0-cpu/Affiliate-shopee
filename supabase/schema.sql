@@ -95,10 +95,23 @@ create table if not exists generated_posts (
   published_at      timestamptz,
   error_log         text,
   content_angle_variant text,
+  -- Phase 17: Visual Creative Automation V1
+  creative_type         text default 'TEXT_ONLY',
+  creative_image_url    text,
+  creative_hook         text,
+  creative_brief        text,
+  creative_status       text default 'PENDING',
+  facebook_publish_type text default 'FEED',
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   constraint generated_posts_status_check
-    check (status in ('DRAFT', 'READY', 'REJECTED', 'PUBLISHED', 'FAILED', 'SKIPPED', 'PUBLISHING'))
+    check (status in ('DRAFT', 'READY', 'REJECTED', 'PUBLISHED', 'FAILED', 'SKIPPED', 'PUBLISHING')),
+  constraint generated_posts_creative_type_check
+    check (creative_type in ('TEXT_ONLY', 'IMAGE', 'VIDEO')),
+  constraint generated_posts_creative_status_check
+    check (creative_status in ('PENDING', 'READY', 'MISSING_ASSET', 'FAILED')),
+  constraint generated_posts_fb_publish_type_check
+    check (facebook_publish_type in ('FEED', 'PHOTO', 'VIDEO'))
 );
 
 create index if not exists idx_generated_posts_product_id   on generated_posts (product_id);

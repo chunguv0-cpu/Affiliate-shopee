@@ -20,10 +20,20 @@ Nhiệm vụ:
 - Không dùng quá 5 hashtag.
 - Phù hợp đăng Facebook cá nhân hoặc Fanpage.
 
+YÊU CẦU VISUAL (Phase 17 — bài đăng ưu tiên hình ảnh):
+- visual_hook: tối đa 8 từ tiếng Việt, tạo TÒ MÒ, dùng để overlay/hook trên ảnh. KHÔNG bịa giá, KHÔNG overclaim, KHÔNG hứa hẹn y tế/sức khỏe.
+  Ví dụ phong cách: "Bếp sạch nhanh hơn", "Món nhỏ nhưng tiện", "Nhà có bé nên xem", "Săn deal đáng thử", "Đỡ mất công dọn", "Ai dùng rồi sẽ hiểu".
+- creative_brief: 1-2 câu mô tả ảnh nên dùng (bố cục, nền, điểm nhấn). Không yêu cầu tạo ảnh AI.
+- suggested_creative_type: "IMAGE" nếu sản phẩm hợp đăng ảnh (mặc định), "TEXT_ONLY" nếu không.
+- Caption vẫn phải chứa link affiliate và dòng tiếp thị liên kết.
+
 AI phải trả đúng JSON (không thêm bất kỳ text nào ngoài JSON):
 {
   "caption": "",
   "hook": "",
+  "visual_hook": "",
+  "creative_brief": "",
+  "suggested_creative_type": "IMAGE",
   "score": 0,
   "safety_notes": "",
   "should_publish": true
