@@ -84,8 +84,14 @@ export default async function CalendarPage() {
   const result = await getScheduledPosts();
   const posts = result.ok ? result.posts : [];
 
-  const duePosts = posts.filter((p) => isDue(p.scheduled_at));
-  const upcomingPosts = posts.filter((p) => !isDue(p.scheduled_at));
+  // Tách rõ 3 nhóm để không "ẩn" bài campaign đã đăng vào nhóm quá hạn.
+  const publishedPosts = posts.filter((p) => p.status === "PUBLISHED");
+  const duePosts = posts.filter(
+    (p) => p.status !== "PUBLISHED" && isDue(p.scheduled_at),
+  );
+  const upcomingPosts = posts.filter(
+    (p) => p.status !== "PUBLISHED" && !isDue(p.scheduled_at),
+  );
 
   return (
     <div>
@@ -107,7 +113,7 @@ export default async function CalendarPage() {
         <EmptyState
           icon="🗓️"
           title="Chưa có bài nào được lên lịch"
-          description="Hãy vào mục Bài đăng AI và đặt lịch cho bài READY."
+          description="Chưa có bài nào được lên lịch. Kiểm tra generated_posts.scheduled_at."
           action={
             <Link
               href="/dashboard/posts"
@@ -121,6 +127,7 @@ export default async function CalendarPage() {
         <div className="space-y-8">
           <Section title="Đến hạn hoặc quá hạn" posts={duePosts} />
           <Section title="Sắp tới" posts={upcomingPosts} />
+          <Section title="Đã đăng" posts={publishedPosts} />
         </div>
       )}
     </div>
