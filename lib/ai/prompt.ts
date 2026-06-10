@@ -1,4 +1,4 @@
-import type { ProductInput } from "@/lib/ai/client";
+import type { InferProductInput, ProductInput } from "@/lib/ai/client";
 
 /**
  * System prompt định hướng AI viết caption Affiliate Shopee cho Facebook.
@@ -83,4 +83,39 @@ export function buildAffiliateUserPrompt(product: ProductInput): string {
     "Hãy viết caption theo đúng yêu cầu và CHỈ trả về JSON đúng định dạng.",
   );
   return lines.filter((l) => l !== undefined).join("\n");
+}
+
+/**
+ * System prompt cho việc suy luận thông tin sản phẩm từ link affiliate + metadata.
+ */
+export const INFER_PRODUCT_SYSTEM_PROMPT = `Bạn là trợ lý suy luận thông tin sản phẩm Shopee từ link affiliate và metadata công khai.
+
+Quy tắc:
+- KHÔNG bịa giá cụ thể nếu metadata không có giá. Nếu không rõ giá, đặt price_note = "giá có thể thay đổi theo thời điểm".
+- product_name phải NGẮN, dễ hiểu (tối đa ~80 ký tự). Nếu có title thì ưu tiên rút gọn từ title.
+- Nếu không đủ dữ liệu để biết tên, đặt product_name = "Sản phẩm Shopee" và confidence thấp (< 60).
+- target_customer và product_angle chỉ suy luận NHẸ từ title/description, không chắc thì để rỗng.
+- KHÔNG claim công dụng mạnh, không nói "tốt nhất/rẻ nhất/cam kết".
+- confidence là số 0-100 thể hiện độ tin cậy của suy luận.
+
+Chỉ trả về JSON đúng định dạng:
+{
+  "product_name": "",
+  "price_note": "",
+  "target_customer": "",
+  "product_angle": "",
+  "confidence": 0,
+  "notes": ""
+}`;
+
+export function buildInferProductUserPrompt(input: InferProductInput): string {
+  return [
+    "Dữ liệu đầu vào:",
+    `- affiliate_link: ${input.affiliate_link}`,
+    `- resolved_url: ${input.resolved_url ?? "(không có)"}`,
+    `- title: ${input.title ?? "(không có)"}`,
+    `- description: ${input.description ?? "(không có)"}`,
+    "",
+    "Hãy suy luận và CHỈ trả về JSON đúng định dạng.",
+  ].join("\n");
 }

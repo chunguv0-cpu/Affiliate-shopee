@@ -1,5 +1,6 @@
+import Link from "next/link";
+
 import AffiliateLinkRow from "@/components/dashboard/AffiliateLinkRow";
-import CsvImportPanel from "@/components/dashboard/CsvImportPanel";
 import EmptyState from "@/components/dashboard/EmptyState";
 import PageHeader from "@/components/dashboard/PageHeader";
 import { getProducts } from "@/app/dashboard/products/actions";
@@ -27,8 +28,12 @@ export default async function AffiliateLinksPage() {
         </div>
       ) : null}
 
-      <div className="mb-8">
-        <CsvImportPanel />
+      <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-600">
+        Muốn nhập hàng loạt? Dùng{" "}
+        <Link href="/dashboard/import-products" className="font-medium text-blue-600 hover:underline">
+          Nhập link Affiliate hàng loạt
+        </Link>{" "}
+        — dán mỗi dòng một link, AI tự điền thông tin sản phẩm.
       </div>
 
       <h3 className="mb-3 text-base font-semibold text-gray-900">

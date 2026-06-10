@@ -14,6 +14,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Tổng quan", href: "/dashboard", icon: "📊" },
   { label: "Sản phẩm", href: "/dashboard/products", icon: "🛍️" },
   { label: "Affiliate Links", href: "/dashboard/affiliate-links", icon: "🔗" },
+  { label: "Nhập link", href: "/dashboard/import-products", icon: "📥" },
   { label: "Chiến dịch", href: "/dashboard/campaigns", icon: "🚀" },
   { label: "Bài đăng", href: "/dashboard/posts", icon: "📝" },
   { label: "Lịch đăng", href: "/dashboard/calendar", icon: "🗓️" },

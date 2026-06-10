@@ -152,6 +152,18 @@ File [`vercel.json`](vercel.json) khai báo chạy **1 lần/ngày** lúc 01:00 
   trong Supabase SQL Editor để check constraint chấp nhận `PUBLISHING`.
 - **Test cron local:** xem mục 8.
 
+## 9b. Nhập link Affiliate hàng loạt (`/dashboard/import-products`)
+
+- **Mỗi dòng một link** affiliate Shopee đã chuyển đổi (không cần điền CSV/tên sản phẩm).
+- Link phải là **link đã chuyển đổi từ tài khoản Shopee Affiliate** (s.shopee.vn / shope.ee / shopee.vn).
+- **Nên gắn sub_id trước khi chuyển link** để theo dõi hoa hồng (app cũng tự sinh sub_id nội bộ).
+- App chỉ **enrich metadata công khai** (Open Graph / `<title>`) bằng `fetch` server-side
+  — KHÔNG login, KHÔNG cookie, KHÔNG headless browser. Nếu Shopee chặn bot thì metadata
+  có thể thiếu; khi đó AI suy luận từ link và đặt **confidence thấp** (đánh dấu “cần kiểm tra lại”).
+- AI tự điền `product_name`, `price_note`, `target_customer`, `product_angle`. Sản phẩm import
+  có `link_status=READY`, `status=ACTIVE`; **không** tự tạo caption/chiến dịch.
+- Giới hạn **tối đa 20 link/lần**. Nếu AI confidence thấp, hãy mở `/dashboard/products` kiểm tra/sửa lại.
+
 ## 10. Deploy lên Vercel
 
 Trước khi deploy, chạy `npm run check:env` và `npm run build` để chắc chắn không

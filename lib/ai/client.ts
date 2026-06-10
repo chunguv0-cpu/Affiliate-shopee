@@ -2,7 +2,12 @@ import "server-only";
 
 import OpenAI from "openai";
 
-import { AFFILIATE_SYSTEM_PROMPT, buildAffiliateUserPrompt } from "@/lib/ai/prompt";
+import {
+  AFFILIATE_SYSTEM_PROMPT,
+  buildAffiliateUserPrompt,
+  INFER_PRODUCT_SYSTEM_PROMPT,
+  buildInferProductUserPrompt,
+} from "@/lib/ai/prompt";
 import { safeParseAIJson } from "@/lib/ai/json";
 
 /**
@@ -196,4 +201,141 @@ export async function generateAffiliateCaption(
     default:
       return mockGenerate(product);
   }
+}
+
+// ===========================================================================
+// Phase 11: suy luận thông tin sản phẩm từ link affiliate + metadata
+// ===========================================================================
+
+/** Đầu vào suy luận sản phẩm. */
+export type InferProductInput = {
+  affiliate_link: string;
+  resolved_url?: string | null;
+  title?: string | null;
+  description?: string | null;
+};
+
+/** Kết quả suy luận sản phẩm. */
+export type InferredProductInfo = {
+  product_name: string;
+  price_note: string | null;
+  target_customer: string | null;
+  product_angle: string | null;
+  confidence: number;
+  notes: string;
+};
+
+const DEFAULT_PRICE_NOTE = "giá có thể thay đổi theo thời điểm";
+
+/** Suy luận GIẢ LẬP khi AI_PROVIDER=mock. */
+function mockInfer(input: InferProductInput): InferredProductInfo {
+  const title = input.title?.trim();
+  if (!title) {
+    return {
+      product_name: "Sản phẩm Shopee",
+      price_note: DEFAULT_PRICE_NOTE,
+      target_customer: "người mua sắm online",
+      product_angle: "deal sản phẩm Shopee, cần kiểm tra thêm",
+      confidence: 50,
+      notes: "Mock: không có metadata, cần kiểm tra lại.",
+    };
+  }
+  return {
+    product_name: title.slice(0, 80),
+    price_note: DEFAULT_PRICE_NOTE,
+    target_customer: "người mua sắm online",
+    product_angle: "deal sản phẩm Shopee",
+    confidence: 75,
+    notes: "Mock: suy luận từ title metadata.",
+  };
+}
+
+/** Đọc cấu hình provider (v98/openai) cho gọi chat JSON. */
+function resolveProviderConfig(provider: "v98" | "openai"): {
+  apiKey: string;
+  baseURL?: string;
+  model: string;
+} {
+  if (provider === "v98") {
+    const apiKey = process.env.V98_API_KEY?.trim();
+    const baseURL = process.env.V98_BASE_URL?.trim();
+    const model = process.env.V98_MODEL?.trim();
+    if (!apiKey) throw new Error("Thiếu V98_API_KEY. Vui lòng cấu hình trong .env.local.");
+    if (!baseURL) throw new Error("Thiếu V98_BASE_URL. Vui lòng cấu hình trong .env.local.");
+    if (!model) throw new Error("Thiếu V98_MODEL. Vui lòng cấu hình trong .env.local.");
+    return { apiKey, baseURL, model };
+  }
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const model = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
+  if (!apiKey) throw new Error("Thiếu OPENAI_API_KEY. Vui lòng cấu hình trong .env.local.");
+  return { apiKey, model };
+}
+
+/** Parse JSON suy luận an toàn (fallback về mock nếu lỗi). */
+function parseInferJson(raw: string, input: InferProductInput): InferredProductInfo {
+  const fallback = mockInfer(input);
+  if (typeof raw !== "string" || raw.trim() === "") return fallback;
+
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) return fallback;
+
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return fallback;
+  }
+
+  const str = (v: unknown): string | null =>
+    typeof v === "string" && v.trim() ? v.trim() : null;
+
+  const productName =
+    str(obj.product_name)?.slice(0, 120) ??
+    input.title?.trim()?.slice(0, 120) ??
+    "Sản phẩm Shopee";
+  const priceNote = str(obj.price_note) ?? DEFAULT_PRICE_NOTE;
+  const confidenceRaw =
+    typeof obj.confidence === "number" && Number.isFinite(obj.confidence)
+      ? obj.confidence
+      : 50;
+  const confidence = Math.max(0, Math.min(100, Math.round(confidenceRaw)));
+
+  return {
+    product_name: productName,
+    price_note: priceNote,
+    target_customer: str(obj.target_customer),
+    product_angle: str(obj.product_angle),
+    confidence,
+    notes: typeof obj.notes === "string" ? obj.notes : "",
+  };
+}
+
+/**
+ * Suy luận thông tin sản phẩm từ link affiliate + metadata (mock/v98/openai).
+ */
+export async function inferProductInfoFromAffiliateLink(
+  input: InferProductInput,
+): Promise<InferredProductInfo> {
+  const provider = getAIProvider();
+  if (provider === "mock") return mockInfer(input);
+
+  const { apiKey, baseURL, model } = resolveProviderConfig(provider);
+  const client = new OpenAI({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+  });
+
+  const completion = await client.chat.completions.create({
+    model,
+    temperature: 0.5,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: INFER_PRODUCT_SYSTEM_PROMPT },
+      { role: "user", content: buildInferProductUserPrompt(input) },
+    ],
+  });
+
+  const raw = completion.choices[0]?.message?.content ?? "";
+  return parseInferJson(raw, input);
 }

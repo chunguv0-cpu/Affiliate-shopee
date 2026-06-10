@@ -10,6 +10,27 @@ export function isShopeeAffiliateLink(url: string): boolean {
 }
 
 /**
+ * Domain được phép khi import link hàng loạt: s.shopee.vn, shope.ee, shopee.vn.
+ * Trả về hostname (lowercase) nếu hợp lệ, ngược lại null.
+ */
+export function getAllowedShopeeHost(url: string): string | null {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (
+      host === "s.shopee.vn" ||
+      host === "shope.ee" ||
+      host === "shopee.vn" ||
+      host.endsWith(".shopee.vn")
+    ) {
+      return host;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Suy ra link_status từ affiliate_link theo quy tắc:
  * - rỗng              -> NEED_CONVERT
  * - không http(s)     -> INVALID
