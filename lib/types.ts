@@ -43,6 +43,42 @@ export const PRODUCT_STATUS_LABELS: Record<ProductStatus, string> = {
   ARCHIVED: "Lưu trữ",
 };
 
+// ===========================================================================
+// Phase 14 — Sourcing Workflow
+// ===========================================================================
+export type SourcingStatus = "NEW" | "SOURCING" | "LINK_READY" | "IMPORTED" | "REJECTED";
+
+export const SOURCING_STATUS_LABELS: Record<SourcingStatus, string> = {
+  NEW: "Mới",
+  SOURCING: "Đang tìm",
+  LINK_READY: "Đã có link",
+  IMPORTED: "Đã import",
+  REJECTED: "Bỏ qua",
+};
+
+export type SourcingCandidate = {
+  id: string;
+  recommendation_id: string | null;
+  suggested_product: string;
+  category: string | null;
+  reason: string | null;
+  target_customer: string | null;
+  pain_point: string | null;
+  suggested_search_keywords: unknown;
+  content_angle: string | null;
+  first_post_hook: string | null;
+  cta: string | null;
+  priority: string | null;
+  confidence: string | null;
+  status: SourcingStatus;
+  affiliate_link: string | null;
+  sub_id: string | null;
+  notes: string | null;
+  product_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type GeneratedPostStatus =
   | "DRAFT"
   | "READY"

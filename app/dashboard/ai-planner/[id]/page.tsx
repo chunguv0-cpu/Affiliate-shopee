@@ -10,6 +10,11 @@ import {
   getResearchSources,
 } from "@/app/dashboard/ai-planner/actions";
 import { normalizeCampaignPlan } from "@/lib/ai/normalize-campaign-plan";
+import {
+  SaveAllOpportunitiesButton,
+  SaveOpportunityButton,
+} from "@/components/dashboard/SourcingSaveButtons";
+import type { OpportunityInput } from "@/app/dashboard/sourcing/actions";
 import { PLANNER_MODE_LABELS, type PlannerMode } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -114,6 +119,21 @@ export default async function RecommendationDetailPage({
     pd.recommended_categories.length > 0 ||
     Boolean(pd.discovery_summary);
 
+  const opportunityInputs: OpportunityInput[] = pd.new_product_opportunities.map((op) => ({
+    recommendation_id: rec.id,
+    suggested_product: op.suggested_product,
+    category: op.category,
+    reason: op.reason,
+    target_customer: op.target_customer,
+    pain_point: op.pain_point,
+    suggested_search_keywords: op.suggested_search_keywords,
+    content_angle: op.content_angle,
+    first_post_hook: op.first_post_hook,
+    cta: op.cta,
+    priority: op.priority,
+    confidence: op.confidence,
+  }));
+
   return (
     <div>
       <PageHeader
@@ -212,6 +232,7 @@ export default async function RecommendationDetailPage({
                     <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                       Các sản phẩm này <strong>chưa có link affiliate</strong>. Hãy tìm link, gắn sub_id, import vào app rồi mới tạo campaign thật.
                     </div>
+                    <SaveAllOpportunitiesButton recommendationId={rec.id} opportunities={opportunityInputs} />
                     <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                       {pd.new_product_opportunities.map((op, i) => (
                         <div key={i} className="rounded-lg border border-gray-200 p-3">
@@ -237,6 +258,7 @@ export default async function RecommendationDetailPage({
                               ))}
                             </div>
                           ) : null}
+                          <SaveOpportunityButton recommendationId={rec.id} opportunity={opportunityInputs[i]} />
                         </div>
                       ))}
                     </div>
