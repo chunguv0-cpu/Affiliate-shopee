@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import type { CampaignGoal, PlannerProduct } from "@/lib/ai/campaign-planner";
+import { generateAffiliateCaption, type ProductInput } from "@/lib/ai/client";
 import { normalizeCampaignPlan } from "@/lib/ai/normalize-campaign-plan";
 import { validateCampaignPlanQuality } from "@/lib/ai/plan-quality-checker";
 import {
@@ -21,9 +22,12 @@ import {
 } from "@/lib/research/research-summarizer";
 import { getSearchProvider, searchWeb, type SearchResult } from "@/lib/research/search-client";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { CONTENT_ANGLE_VARIANTS } from "@/lib/types";
 import type {
   AICampaignRecommendation,
+  GeneratedPostStatus,
   PlannerMode,
+  Product,
   RecommendationStatus,
 } from "@/lib/types";
 
@@ -980,5 +984,292 @@ export async function updateRecommendationStatus(
   } catch (err) {
     const m = err instanceof Error ? err.message : "Lỗi không xác định.";
     return { ok: false, error: `Cập nhật thất bại: ${m}` };
+  }
+}
+
+// ===========================================================================
+// Phase 15 — Tạo campaign thật từ gợi ý AI đã duyệt.
+// ===========================================================================
+const CONVERT_STARTED = "CONVERT_AI_PLAN_TO_CAMPAIGN_STARTED";
+const CONVERT_SUCCESS = "CONVERT_AI_PLAN_TO_CAMPAIGN_SUCCESS";
+const CONVERT_FAILED = "CONVERT_AI_PLAN_TO_CAMPAIGN_FAILED";
+const CONVERT_MAX_POSTS = 14;
+const CONVERT_TIME_SLOTS = ["08:00", "20:30"];
+
+export type ConvertCampaignResult =
+  | {
+      ok: true;
+      campaignId: string;
+      createdPosts: number;
+      rejectedPosts: number;
+      failedPosts: number;
+      productsUsed: number;
+      skipped: number;
+    }
+  | { ok: false; error: string };
+
+const NO_READY_PRODUCTS_ERROR =
+  "Chưa có sản phẩm READY để tạo campaign. Hãy tìm link affiliate và convert sản phẩm trước.";
+
+/** Dựng slot ISO (giờ VN +07:00): startDate + nhiều ngày × khung giờ, tối đa max. */
+function buildCampaignSlots(startDate: string, days: number, times: string[], max: number): string[] {
+  const base = new Date(`${startDate}T00:00:00+07:00`);
+  if (Number.isNaN(base.getTime())) return [];
+  const slots: string[] = [];
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  for (let day = 0; day < days; day += 1) {
+    for (const time of times) {
+      const [hh, mm] = time.split(":").map((x) => parseInt(x, 10));
+      if (!Number.isFinite(hh) || !Number.isFinite(mm)) continue;
+      slots.push(new Date(base.getTime() + day * DAY_MS + hh * 3600000 + mm * 60000).toISOString());
+      if (slots.length >= max) return slots;
+    }
+  }
+  return slots;
+}
+
+/** Số ngày từ week_start đến week_end (bao gồm 2 đầu), clamp 1..7; mặc định 7. */
+function daysBetween(start: string | null, end: string | null): number {
+  if (!start) return 7;
+  const s = new Date(`${start}T00:00:00+07:00`);
+  if (Number.isNaN(s.getTime())) return 7;
+  const e = end ? new Date(`${end}T00:00:00+07:00`) : null;
+  if (!e || Number.isNaN(e.getTime())) return 7;
+  const diff = Math.floor((e.getTime() - s.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+  return Math.max(1, Math.min(7, diff));
+}
+
+/**
+ * Chuyển một gợi ý AI ĐÃ DUYỆT thành campaign thật + bài đăng (READY/REJECTED).
+ * KHÔNG đăng ngay (cron sẽ đăng). KHÔNG tạo bài cho sản phẩm thiếu link affiliate.
+ */
+export async function convertAiRecommendationToCampaign(
+  id: string,
+): Promise<ConvertCampaignResult> {
+  if (!id) return { ok: false, error: "Thiếu mã gợi ý." };
+
+  let supabase: ReturnType<typeof createSupabaseAdminClient>;
+  try {
+    supabase = createSupabaseAdminClient();
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Không kết nối được cơ sở dữ liệu: ${m}` };
+  }
+
+  // Đọc recommendation.
+  const { data: recRow, error: recErr } = await supabase
+    .from("ai_campaign_recommendations")
+    .select("id, title, status, week_start, week_end, planner_mode, product_decision_table, campaign_id")
+    .eq("id", id)
+    .single();
+  if (recErr || !recRow) return { ok: false, error: "Không tìm thấy gợi ý." };
+  if (recRow.status === "CONVERTED_TO_CAMPAIGN") {
+    return { ok: false, error: "Gợi ý này đã được tạo thành campaign." };
+  }
+  if (recRow.status !== "APPROVED") {
+    return { ok: false, error: "Bạn cần duyệt gợi ý trước khi tạo campaign." };
+  }
+
+  await insertPostingLog(supabase, null, CONVERT_STARTED, "SUCCESS", `Bắt đầu tạo campaign từ gợi ý ${id}.`, {
+    recommendation_id: id,
+  });
+
+  try {
+    // Sản phẩm đủ điều kiện: ACTIVE + READY + có affiliate_link.
+    const { data: prodData } = await supabase
+      .from("products")
+      .select("*")
+      .eq("status", "ACTIVE")
+      .eq("link_status", "READY");
+    const eligible = ((prodData ?? []) as Product[]).filter((p) => !!p.affiliate_link);
+    if (eligible.length === 0) {
+      await insertPostingLog(supabase, null, CONVERT_FAILED, "FAILED", NO_READY_PRODUCTS_ERROR, {
+        recommendation_id: id,
+      });
+      return { ok: false, error: NO_READY_PRODUCTS_ERROR };
+    }
+
+    // Khớp sản phẩm với gợi ý (đơn giản & an toàn).
+    const byId = new Map(eligible.map((p) => [p.id, p] as const));
+    const matched = new Map<string, Product>();
+
+    // a) product_id trong product_decision_table.
+    const decisions = Array.isArray(recRow.product_decision_table)
+      ? (recRow.product_decision_table as Array<{ product_id?: unknown; product_name?: unknown }>)
+      : [];
+    const decisionNames: string[] = [];
+    for (const d of decisions) {
+      const pid = typeof d.product_id === "string" ? d.product_id : null;
+      if (pid && byId.has(pid)) matched.set(pid, byId.get(pid)!);
+      if (typeof d.product_name === "string" && d.product_name.trim()) {
+        decisionNames.push(d.product_name.trim().toLowerCase());
+      }
+    }
+
+    // b) khớp tên (lowercase includes 2 chiều).
+    for (const dn of decisionNames) {
+      for (const p of eligible) {
+        const pn = p.product_name.toLowerCase();
+        if (pn.includes(dn) || dn.includes(pn)) matched.set(p.id, p);
+      }
+    }
+
+    // c) sourcing_candidates đã IMPORTED từ chính gợi ý này.
+    const { data: candRows } = await supabase
+      .from("sourcing_candidates")
+      .select("product_id")
+      .eq("recommendation_id", id)
+      .eq("status", "IMPORTED");
+    for (const c of candRows ?? []) {
+      const pid = c.product_id as string | null;
+      if (pid && byId.has(pid)) matched.set(pid, byId.get(pid)!);
+    }
+
+    const products = Array.from(matched.values());
+    if (products.length === 0) {
+      await insertPostingLog(supabase, null, CONVERT_FAILED, "FAILED", NO_READY_PRODUCTS_ERROR, {
+        recommendation_id: id,
+      });
+      return { ok: false, error: NO_READY_PRODUCTS_ERROR };
+    }
+
+    // Lịch fallback: 2 bài/ngày, 08:00 & 20:30, từ week_start, tối đa 14.
+    const startDate = (recRow.week_start as string | null) ?? new Date().toISOString().slice(0, 10);
+    const days = daysBetween(recRow.week_start as string | null, recRow.week_end as string | null);
+    const slots = buildCampaignSlots(startDate, days, CONVERT_TIME_SLOTS, CONVERT_MAX_POSTS);
+    if (slots.length === 0) {
+      return { ok: false, error: "Không tạo được lịch đăng. Kiểm tra lại tuần chạy của gợi ý." };
+    }
+    const target = Math.min(slots.length, CONVERT_MAX_POSTS);
+
+    // Gán sản phẩm + góc viết round-robin để lấp đầy slot.
+    type Assignment = { product: Product; angle: string | null };
+    const assignments: Assignment[] = [];
+    for (let v = 0; assignments.length < target; v += 1) {
+      for (const product of products) {
+        if (assignments.length >= target) break;
+        assignments.push({
+          product,
+          angle: CONTENT_ANGLE_VARIANTS[v % CONTENT_ANGLE_VARIANTS.length],
+        });
+      }
+      if (v > CONTENT_ANGLE_VARIANTS.length + 1) break; // chặn vòng lặp vô hạn
+    }
+    const count = assignments.length;
+
+    // Tạo campaign.
+    const { data: campaign, error: campErr } = await supabase
+      .from("campaigns")
+      .insert({
+        name: (recRow.title as string) || "Campaign từ gợi ý AI",
+        description: `Created from AI recommendation: ${id}`,
+        status: "ACTIVE",
+        start_at: slots[0],
+        end_at: slots[count - 1],
+      })
+      .select("id")
+      .single();
+    if (campErr || !campaign) {
+      const m = campErr?.message ?? "không rõ";
+      await insertPostingLog(supabase, null, CONVERT_FAILED, "FAILED", `Tạo campaign thất bại: ${m}`, {
+        recommendation_id: id,
+      });
+      return { ok: false, error: `Tạo campaign thất bại: ${m}` };
+    }
+    const campaignId = campaign.id as string;
+
+    // Sinh caption + insert bài theo slot.
+    let createdPosts = 0;
+    let rejectedPosts = 0;
+    let failedPosts = 0;
+
+    for (let i = 0; i < count; i += 1) {
+      const { product, angle } = assignments[i];
+      const scheduledAt = slots[i];
+      const input: ProductInput = {
+        id: product.id,
+        product_name: product.product_name,
+        affiliate_link: product.affiliate_link ?? "",
+        price_note: product.price_note,
+        target_customer: product.target_customer,
+        product_angle: product.product_angle,
+        image_url: product.image_url,
+        content_angle_variant: angle,
+      };
+      try {
+        const result = await generateAffiliateCaption(input);
+        const status: GeneratedPostStatus =
+          result.score >= 80 && result.should_publish === true ? "READY" : "REJECTED";
+        const { error: insErr } = await supabase.from("generated_posts").insert({
+          product_id: product.id,
+          campaign_id: campaignId,
+          caption: result.caption,
+          hook: result.hook,
+          ai_score: result.score,
+          safety_notes: result.safety_notes,
+          should_publish: result.should_publish,
+          status,
+          scheduled_at: scheduledAt,
+          content_angle_variant: angle,
+        });
+        if (insErr) {
+          failedPosts += 1;
+          continue;
+        }
+        if (status === "READY") createdPosts += 1;
+        else rejectedPosts += 1;
+      } catch {
+        failedPosts += 1;
+        await supabase.from("generated_posts").insert({
+          product_id: product.id,
+          campaign_id: campaignId,
+          should_publish: false,
+          status: "FAILED",
+          scheduled_at: scheduledAt,
+          content_angle_variant: angle,
+        });
+      }
+    }
+
+    // Đánh dấu đã chuyển + gắn campaign_id.
+    await supabase
+      .from("ai_campaign_recommendations")
+      .update({
+        status: "CONVERTED_TO_CAMPAIGN",
+        campaign_id: campaignId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+
+    await insertPostingLog(
+      supabase,
+      null,
+      CONVERT_SUCCESS,
+      "SUCCESS",
+      `Tạo campaign ${campaignId}: ${createdPosts} bài READY, ${rejectedPosts} REJECTED, ${failedPosts} lỗi, ${products.length} sản phẩm.`,
+      { recommendation_id: id, campaign_id: campaignId },
+    );
+
+    revalidatePath("/dashboard/campaigns");
+    revalidatePath("/dashboard/posts");
+    revalidatePath("/dashboard/calendar");
+    revalidatePath(`/dashboard/ai-planner/${id}`);
+    revalidatePath("/dashboard/ai-planner");
+
+    return {
+      ok: true,
+      campaignId,
+      createdPosts,
+      rejectedPosts,
+      failedPosts,
+      productsUsed: products.length,
+      skipped: eligible.length - products.length,
+    };
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    await insertPostingLog(supabase, null, CONVERT_FAILED, "FAILED", `Tạo campaign thất bại: ${m}`.slice(0, 2000), {
+      recommendation_id: id,
+    });
+    return { ok: false, error: `Tạo campaign thất bại: ${m}` };
   }
 }

@@ -240,6 +240,7 @@ export type AICampaignRecommendation = {
   job_input?: unknown;
   planner_mode?: PlannerMode | null;
   product_discovery_strategy?: unknown;
+  campaign_id?: string | null;
   created_at: string;
   updated_at: string;
 };

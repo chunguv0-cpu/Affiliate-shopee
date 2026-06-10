@@ -218,6 +218,8 @@ create table if not exists ai_campaign_recommendations (
   -- Phase 13.3: Product Discovery Mode
   planner_mode               text default 'HYBRID',
   product_discovery_strategy jsonb default '{}'::jsonb,
+  -- Phase 15: liên kết campaign thật được tạo từ gợi ý
+  campaign_id                uuid references campaigns (id) on delete set null,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now(),
   constraint ai_campaign_recommendations_status_check

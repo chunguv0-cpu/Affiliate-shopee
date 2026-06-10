@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import AiPlannerStatusPoller from "@/components/dashboard/AiPlannerStatusPoller";
+import ConvertToCampaignButton from "@/components/dashboard/ConvertToCampaignButton";
 import PageHeader from "@/components/dashboard/PageHeader";
 import RecommendationStatusButtons from "@/components/dashboard/RecommendationStatusButtons";
 import {
@@ -186,6 +187,9 @@ export default async function RecommendationDetailPage({
           ) : null}
           <div className="mt-4 border-t border-gray-100 pt-4">
             <RecommendationStatusButtons id={rec.id} status={rec.status} />
+          </div>
+          <div className="mt-4 border-t border-gray-100 pt-4">
+            <ConvertToCampaignButton id={rec.id} status={rec.status} plannerMode={plannerMode} />
           </div>
         </Section>
 
