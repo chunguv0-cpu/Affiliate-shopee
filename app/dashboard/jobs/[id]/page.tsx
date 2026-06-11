@@ -86,6 +86,18 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
               {d.browserlessEndpointHasToken !== undefined ? (
                 <div>Browserless token: <span className="text-gray-800">{d.browserlessEndpointHasToken ? "yes" : "missing"}</span></div>
               ) : null}
+              {d.browserlessEndpointHasExternalProxy !== undefined ? (
+                <div>Endpoint external proxy: <span className="text-gray-800">{d.browserlessEndpointHasExternalProxy ? "yes" : "no"}</span></div>
+              ) : null}
+              {d.browserlessEndpointHasLaunch !== undefined ? (
+                <div>Endpoint launch args: <span className="text-gray-800">{d.browserlessEndpointHasLaunch ? "yes" : "no"}</span></div>
+              ) : null}
+              {d.browserlessNoProxyConnect ? (
+                <div>No-proxy connect: <span className="text-gray-800">{String(d.browserlessNoProxyConnect)}</span></div>
+              ) : null}
+              {d.browserlessNoProxyError ? (
+                <div className="sm:col-span-2">No-proxy error: <span className="break-all text-gray-800">{String(d.browserlessNoProxyError)}</span></div>
+              ) : null}
               {d.browserlessProxySource ? (
                 <div>Proxy source: <span className="text-gray-800">{String(d.browserlessProxySource)}</span></div>
               ) : null}

@@ -137,6 +137,7 @@ function describeWsEndpoint(endpoint: string, diagnostics: Record<string, unknow
     diagnostics.browserlessEndpointHasToken = parsed.searchParams.has("token");
     diagnostics.browserlessEndpointHasExternalProxy = parsed.searchParams.has("externalProxyServer");
     diagnostics.browserlessEndpointHasChromeProxyArg = parsed.searchParams.has("--proxy-server");
+    diagnostics.browserlessEndpointHasLaunch = parsed.searchParams.has("launch");
     diagnostics.browserlessEndpointHasStealth = parsed.searchParams.has("stealth");
     diagnostics.browserlessEndpointHasTimeout = parsed.searchParams.has("timeout");
     if (parsed.protocol !== "wss:" && parsed.protocol !== "ws:") {
@@ -155,6 +156,21 @@ function describeWsEndpoint(endpoint: string, diagnostics: Record<string, unknow
 function errorToString(err: unknown): string {
   if (err instanceof Error) return err.message || err.name;
   if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    const record = err as Record<string, unknown>;
+    const parts: string[] = [];
+    const ctor = (err as { constructor?: { name?: string } }).constructor?.name;
+    if (ctor && ctor !== "Object") parts.push(ctor);
+    for (const key of ["name", "message", "code", "status", "reason", "type"]) {
+      const value = record[key];
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        parts.push(`${key}=${String(value)}`);
+      }
+    }
+    const propertyNames = Object.getOwnPropertyNames(err).filter((key) => !["name", "message", "stack"].includes(key));
+    if (propertyNames.length > 0) parts.push(`props=${propertyNames.slice(0, 8).join(",")}`);
+    if (parts.length > 0) return parts.join("; ");
+  }
   try {
     return JSON.stringify(err);
   } catch {
@@ -187,11 +203,38 @@ function buildWsEndpoint(proxy: ProxyConfig): string | null {
   if (proxy.externalProxyServer && proxy.mode === "external" && !/[?&]externalProxyServer=/.test(ep)) {
     ep = appendParam(ep, "externalProxyServer", proxy.externalProxyServer);
   }
-  if (proxy.chromeProxyServer && proxy.mode === "chrome_arg" && !/[?&]--proxy-server=/.test(ep)) {
-    ep = appendParam(ep, "--proxy-server", proxy.chromeProxyServer);
+  if (proxy.chromeProxyServer && proxy.mode === "chrome_arg" && !/[?&](launch|--proxy-server|%2D%2Dproxy-server)=/.test(ep)) {
+    ep = appendParam(ep, "launch", JSON.stringify({ args: [`--proxy-server=${proxy.chromeProxyServer}`] }));
   }
 
   return ep;
+}
+
+function withoutProxy(proxy: ProxyConfig): ProxyConfig {
+  return {
+    ...proxy,
+    browserlessProxy: null,
+    browserlessProxyCountry: null,
+    browserlessProxySticky: null,
+    browserlessProxyLocaleMatch: null,
+    customProxySource: null,
+    browserlessProxyEnvLooksCustom: false,
+    externalProxyServer: null,
+    chromeProxyServer: null,
+    username: null,
+    password: null,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function connectBrowserless(wsEndpoint: string): Promise<any> {
+  const mod = (await import("puppeteer-core")) as unknown as {
+    default: {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      connect: (o: { browserWSEndpoint: string }) => Promise<any>;
+    };
+  };
+  return mod.default.connect({ browserWSEndpoint: wsEndpoint });
 }
 
 const UA =
@@ -230,10 +273,8 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
   let browser: any = null;
   let stage = "connect";
   try {
-    diagnostics.browserExtractionStage = "import_puppeteer";
-    const mod = (await import("puppeteer-core")) as unknown as { default: { connect: (o: { browserWSEndpoint: string }) => Promise<unknown> } };
     diagnostics.browserExtractionStage = stage;
-    browser = await mod.default.connect({ browserWSEndpoint: wsEndpoint });
+    browser = await connectBrowserless(wsEndpoint);
     stage = "new_page";
     diagnostics.browserExtractionStage = stage;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -350,6 +391,32 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
   } catch (err) {
     diagnostics.browserExtractionStage = stage;
     diagnostics.browserError = errorToString(err).slice(0, 500);
+    if (stage === "connect" && (proxy.browserlessProxy || proxy.externalProxyServer)) {
+      const probeEndpoint = buildWsEndpoint(withoutProxy(proxy));
+      if (probeEndpoint) {
+        const probeEndpointError = describeWsEndpoint(probeEndpoint, diagnostics);
+        if (probeEndpointError) {
+          diagnostics.browserlessNoProxyConnect = "SKIPPED";
+          diagnostics.browserlessNoProxyError = probeEndpointError;
+        } else {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          let probeBrowser: any = null;
+          try {
+            probeBrowser = await connectBrowserless(probeEndpoint);
+            diagnostics.browserlessNoProxyConnect = "SUCCESS";
+          } catch (probeErr) {
+            diagnostics.browserlessNoProxyConnect = "FAILED";
+            diagnostics.browserlessNoProxyError = errorToString(probeErr).slice(0, 500);
+          } finally {
+            try {
+              await probeBrowser?.close();
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      }
+    }
     return { ok: false, image_urls: [], status: "FAILED", error: diagnostics.browserError as string, diagnostics };
   } finally {
     try {
