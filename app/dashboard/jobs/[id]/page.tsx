@@ -80,6 +80,12 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
               {d.browserExtractionStage ? (
                 <div>Browser stage: <span className="text-gray-800">{String(d.browserExtractionStage)}</span></div>
               ) : null}
+              {d.browserlessEndpointHost ? (
+                <div className="sm:col-span-2">Browserless endpoint: <span className="break-all text-gray-800">{String(d.browserlessEndpointProtocol ?? "?")}://{String(d.browserlessEndpointHost)}{String(d.browserlessEndpointPath ?? "")}</span></div>
+              ) : null}
+              {d.browserlessEndpointHasToken !== undefined ? (
+                <div>Browserless token: <span className="text-gray-800">{d.browserlessEndpointHasToken ? "yes" : "missing"}</span></div>
+              ) : null}
               {d.browserlessProxySource ? (
                 <div>Proxy source: <span className="text-gray-800">{String(d.browserlessProxySource)}</span></div>
               ) : null}

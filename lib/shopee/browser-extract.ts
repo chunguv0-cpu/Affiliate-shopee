@@ -128,6 +128,40 @@ function addProxyDiagnostics(diagnostics: Record<string, unknown>, proxy: ProxyC
   diagnostics.browserlessProxyEnvLooksCustom = proxy.browserlessProxyEnvLooksCustom;
 }
 
+function describeWsEndpoint(endpoint: string, diagnostics: Record<string, unknown>): string | null {
+  try {
+    const parsed = new URL(endpoint);
+    diagnostics.browserlessEndpointProtocol = parsed.protocol.replace(":", "");
+    diagnostics.browserlessEndpointHost = parsed.host;
+    diagnostics.browserlessEndpointPath = parsed.pathname || "/";
+    diagnostics.browserlessEndpointHasToken = parsed.searchParams.has("token");
+    diagnostics.browserlessEndpointHasExternalProxy = parsed.searchParams.has("externalProxyServer");
+    diagnostics.browserlessEndpointHasChromeProxyArg = parsed.searchParams.has("--proxy-server");
+    diagnostics.browserlessEndpointHasStealth = parsed.searchParams.has("stealth");
+    diagnostics.browserlessEndpointHasTimeout = parsed.searchParams.has("timeout");
+    if (parsed.protocol !== "wss:" && parsed.protocol !== "ws:") {
+      return "BROWSERLESS_WS_ENDPOINT phải bắt đầu bằng wss:// hoặc ws://.";
+    }
+    if (!parsed.searchParams.has("token")) {
+      return "Thiếu token Browserless trong endpoint. Hãy set BROWSERLESS_API_TOKEN hoặc gắn token vào BROWSERLESS_WS_ENDPOINT.";
+    }
+    return null;
+  } catch {
+    diagnostics.browserlessEndpointProtocol = "invalid";
+    return "BROWSERLESS_WS_ENDPOINT không phải URL hợp lệ.";
+  }
+}
+
+function errorToString(err: unknown): string {
+  if (err instanceof Error) return err.message || err.name;
+  if (typeof err === "string") return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
 function buildWsEndpoint(proxy: ProxyConfig): string | null {
   let ep = process.env.BROWSERLESS_WS_ENDPOINT?.trim();
   if (!ep) return null;
@@ -186,6 +220,10 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
     return { ok: false, image_urls: [], status: "NOT_CONFIGURED", error: "Browser extractor chưa cấu hình.", diagnostics };
   }
   const wsEndpoint = buildWsEndpoint(proxy);
+  if (wsEndpoint) {
+    const endpointError = describeWsEndpoint(wsEndpoint, diagnostics);
+    if (endpointError) return { ok: false, image_urls: [], status: "NOT_CONFIGURED", error: endpointError, diagnostics };
+  }
   if (!wsEndpoint) return { ok: false, image_urls: [], status: "NOT_CONFIGURED", error: "Thiếu BROWSERLESS_WS_ENDPOINT.", diagnostics };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -311,7 +349,7 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
     return { ok: finalImages.length > 0, image_urls: finalImages, status: "SUCCESS", error: null, diagnostics };
   } catch (err) {
     diagnostics.browserExtractionStage = stage;
-    diagnostics.browserError = err instanceof Error ? err.message.slice(0, 200) : "browser error";
+    diagnostics.browserError = errorToString(err).slice(0, 500);
     return { ok: false, image_urls: [], status: "FAILED", error: diagnostics.browserError as string, diagnostics };
   } finally {
     try {
