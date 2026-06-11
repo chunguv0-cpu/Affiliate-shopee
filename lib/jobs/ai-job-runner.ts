@@ -10,6 +10,7 @@ import {
 } from "@/lib/ai/client";
 import { generateAndStoreImageAsset, storeSourceProductImage } from "@/lib/creative/generate-post-images";
 import { insertPostingLog } from "@/lib/posts/log";
+import { fetchProductDataFromProvider, getProductDataProvider } from "@/lib/product/product-data-provider";
 import { extractShopeeImagesWithBrowser, getShopeeImageSourceProvider } from "@/lib/shopee/browser-extract";
 import { isLikelyProductImage } from "@/lib/shopee/image-url";
 import { extractShopeeProductImages, toCanonicalShopeeProductUrl } from "@/lib/shopee/extract";
@@ -207,7 +208,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       let productOriginalUrl: string | null = null;
       let productAffiliateLink: string | null = null;
       let productName: string | null = null;
-      let sourceImageOrigin: "stored" | "shopee_server" | "shopee_browser" | "image_search_fallback" | null = null;
+      let sourceImageOrigin: "stored" | "provider_api" | "shopee_server" | "shopee_browser" | "image_search_fallback" | null = null;
       if (job.related_product_id) {
         const { data: prod } = await supabase
           .from("products")
@@ -227,6 +228,29 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         productName = typeof prod?.product_name === "string" ? prod.product_name : null;
         productOriginalUrl = typeof prod?.original_url === "string" ? prod.original_url : null;
         productAffiliateLink = typeof prod?.affiliate_link === "string" ? prod.affiliate_link : null;
+      }
+
+      // Strategy: Product Data Provider (Apify/custom_api) — nguồn API trả ảnh thật.
+      let providerDiag: Record<string, unknown> | null = null;
+      if (images.length === 0 && getProductDataProvider() !== "none") {
+        const pr = await fetchProductDataFromProvider({
+          affiliate_link: productAffiliateLink ?? input.affiliate_link ?? "",
+          resolved_url: productOriginalUrl ?? input.original_url ?? null,
+          shop_id: null,
+          item_id: null,
+        });
+        providerDiag = {
+          productDataProviderTried: true,
+          productDataProvider: pr.source,
+          productDataProviderOk: pr.ok,
+          productDataProviderError: pr.error ?? null,
+          productDataProviderImageCount: pr.image_urls?.length ?? 0,
+        };
+        if (pr.ok && pr.image_urls && pr.image_urls.length > 0) {
+          images = pr.image_urls;
+          sourceImageOrigin = "provider_api";
+          if (!productName && pr.product_name) productName = pr.product_name;
+        }
       }
 
       // Strategy server_fetch (resolve + meta + api + html scan).
@@ -328,6 +352,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         ...(diagnostics && typeof diagnostics === "object" ? (diagnostics as Record<string, unknown>) : {}),
         imageSourceProvider: provider,
         sourceLinkCandidates: sourceLinks.length,
+        ...(providerDiag ?? {}),
         browserExtractionTried: browserDiag !== null,
         ...(browserDiag ?? {}),
         imageSearchFallbackTried: imageSearchDiag !== null,
