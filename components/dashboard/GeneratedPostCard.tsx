@@ -1,5 +1,6 @@
 import CopyButton from "@/components/dashboard/CopyButton";
 import PostStatusBadge from "@/components/dashboard/PostStatusBadge";
+import RegenerateAssetButton from "@/components/dashboard/RegenerateAssetButton";
 import PublishPostButton from "@/components/dashboard/PublishPostButton";
 import RegenerateCreativeButton from "@/components/dashboard/RegenerateCreativeButton";
 import RetryPostButton from "@/components/dashboard/RetryPostButton";
@@ -83,6 +84,13 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
   const sourceCount = sourceThumbs.filter((a) => !isSearchFallbackOrigin(String(assetMeta(a).source_image_origin ?? assetMeta(a).generated_from ?? ""))).length;
   const overlayAppliedCount = realThumbs.filter((a) => assetMeta(a).local_overlay_applied === true).length;
   const v98CallsUsed = realThumbs.filter((a) => a.source_type === "AI_GENERATED" && assetMeta(a).mock !== true).length;
+  const packTemplate = String(realThumbs.map((a) => assetMeta(a).creative_template).find(Boolean) ?? "—");
+  const scoreValues = realThumbs
+    .map((a) => assetMeta(a).asset_quality_score)
+    .filter((v): v is number => typeof v === "number");
+  const creativeScore = scoreValues.length > 0
+    ? Math.round(scoreValues.reduce((sum, v) => sum + v, 0) / scoreValues.length)
+    : null;
   const packStatus = post.creative_pack_status ?? null;
   const showPack = creativeAssets.length > 0 || (packStatus && packStatus !== "PENDING");
   const canRegenerate = post.status !== "PUBLISHED" && post.status !== "PUBLISHING";
@@ -191,6 +199,13 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
               {v98CallsUsed > 0 ? (
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">V98 calls: {v98CallsUsed}</span>
               ) : null}
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">Template: {packTemplate}</span>
+              {creativeScore !== null ? (
+                <span className="rounded-full bg-lime-50 px-2 py-0.5 text-xs font-medium text-lime-700">Score: {creativeScore}</span>
+              ) : null}
+              {v98CallsUsed <= 2 && realThumbs.length >= 4 ? (
+                <span className="rounded-full bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700">Tiết kiệm V98</span>
+              ) : null}
               {hasSearchFallbackSource ? (
                 <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">Ảnh nguồn từ search fallback</span>
               ) : null}
@@ -198,7 +213,7 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
 
             {realThumbs.length > 0 ? (
               <>
-                <p className="mb-1 text-xs text-gray-500">Ảnh 1: sản phẩm thật từ Shopee · Ảnh 2–4: AI bám sản phẩm (+ chữ).</p>
+                <p className="mb-1 text-xs text-gray-500">{sourceCount} ảnh nguồn + {aiGroundedCount} ảnh AI · overlay render bằng code.</p>
                 <div className="grid grid-cols-4 gap-2">
                   {[...realThumbs]
                     .sort((a, b) => a.sort_order - b.sort_order)
@@ -212,6 +227,9 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
                         </span>
                         {a.source_type === "AI_GENERATED" && a.caption_overlay ? (
                           <span className="absolute inset-x-0 top-0 truncate rounded-t-md bg-black/45 px-1 text-[9px] text-white">{a.caption_overlay}</span>
+                        ) : null}
+                        {canRegenerate ? (
+                          <RegenerateAssetButton postId={post.id} sortOrder={a.sort_order} sourceType={a.source_type} />
                         ) : null}
                       </div>
                     ))}

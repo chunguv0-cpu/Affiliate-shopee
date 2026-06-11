@@ -12,8 +12,10 @@ import {
   type ProductInput,
 } from "@/lib/ai/client";
 import {
+  computePackQualityScore,
   generateAndStoreImageAsset,
   generatePostCreativePack,
+  enhanceAndStoreSourceProductImage,
   materializeImages,
   storeSourceProductImage,
 } from "@/lib/creative/generate-post-images";
@@ -90,7 +92,7 @@ async function attachCreativeAssets(
   try {
     const { data } = await supabase
       .from("post_creative_assets")
-      .select("generated_post_id, image_url, source_type, sort_order, status, caption_overlay, metadata")
+      .select("id, generated_post_id, image_url, source_type, sort_order, status, caption_overlay, metadata")
       .in("generated_post_id", ids)
       .order("sort_order", { ascending: true });
     const byPost = new Map<string, GeneratedPost["creative_assets"]>();
@@ -98,6 +100,7 @@ async function attachCreativeAssets(
       const pid = String(a.generated_post_id);
       const list = byPost.get(pid) ?? [];
       list!.push({
+        id: (a.id as string | null) ?? undefined,
         image_url: (a.image_url as string | null) ?? null,
         source_type: (a.source_type as "PRODUCT" | "FOUND" | "AI_GENERATED") ?? "AI_GENERATED",
         sort_order: typeof a.sort_order === "number" ? a.sort_order : 0,
@@ -258,6 +261,9 @@ export async function generatePostFromProduct(
 
 /** Kết quả regenerate creative pack. */
 export type RegenerateResult = { ok: true; status: string; total: number } | { ok: false; error: string };
+export type RegenerateAssetResult =
+  | { ok: true; sourceType: string; v98CallUsed: boolean }
+  | { ok: false; error: string };
 
 /**
  * Phase 17 — dựng lại pack 4 ảnh AI cho một bài (xóa pack cũ, sinh mới).
@@ -375,6 +381,138 @@ export async function regeneratePostCreativeAssets(postId: string): Promise<Rege
   } catch (err) {
     const m = err instanceof Error ? err.message : "Lỗi không xác định.";
     return { ok: false, error: `Dựng lại ảnh thất bại: ${m}` };
+  }
+}
+
+export async function regeneratePostCreativeAssetSlot(
+  postId: string,
+  sortOrder: number,
+): Promise<RegenerateAssetResult> {
+  if (!postId || typeof postId !== "string") return { ok: false, error: "Thiếu mã bài đăng." };
+  const slot = Number.isFinite(sortOrder) ? Math.max(1, Math.min(4, Math.floor(sortOrder))) : 0;
+  if (!slot) return { ok: false, error: "Slot ảnh không hợp lệ." };
+
+  let supabase: SupabaseClient;
+  try {
+    supabase = createSupabaseAdminClient();
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Không kết nối được cơ sở dữ liệu: ${m}` };
+  }
+
+  try {
+    type ProdEmbed = {
+      product_name?: string;
+      target_customer?: string | null;
+      product_angle?: string | null;
+      affiliate_link?: string | null;
+      source_product_images?: unknown;
+    };
+    const { data: postData, error: postError } = await supabase
+      .from("generated_posts")
+      .select("id, products(product_name, target_customer, product_angle, affiliate_link, source_product_images)")
+      .eq("id", postId)
+      .single();
+    if (postError || !postData) return { ok: false, error: "Không tìm thấy bài đăng." };
+    const postRow = postData as { products: ProdEmbed | ProdEmbed[] | null };
+    const product = Array.isArray(postRow.products) ? postRow.products[0] : postRow.products;
+    const productName = product?.product_name ?? "Sản phẩm";
+
+    const { data: assetData } = await supabase
+      .from("post_creative_assets")
+      .select("source_type, image_url, prompt, caption_overlay, metadata")
+      .eq("generated_post_id", postId)
+      .eq("sort_order", slot)
+      .eq("status", "READY")
+      .limit(1)
+      .maybeSingle();
+    const asset = (assetData ?? null) as {
+      source_type?: string | null;
+      image_url?: string | null;
+      prompt?: string | null;
+      caption_overlay?: string | null;
+      metadata?: unknown;
+    } | null;
+    if (!asset) return { ok: false, error: "Không tìm thấy asset ảnh cần tạo lại." };
+
+    const meta = asset.metadata && typeof asset.metadata === "object" ? (asset.metadata as Record<string, unknown>) : {};
+    const overlay = asset.caption_overlay ?? "";
+    await supabase.from("post_creative_assets").delete().eq("generated_post_id", postId).eq("sort_order", slot);
+
+    if (asset.source_type === "PRODUCT") {
+      let sources = Array.isArray(product?.source_product_images)
+        ? (product!.source_product_images as unknown[]).filter((u): u is string => typeof u === "string" && /^https?:\/\//i.test(u))
+        : [];
+      const origin = typeof meta.origin === "string" && /^https?:\/\//i.test(meta.origin) ? meta.origin : null;
+      if (origin && !sources.includes(origin)) sources = [origin, ...sources];
+      const src = sources.length > 0 ? sources[slot % sources.length] : origin;
+      if (!src) return { ok: false, error: "Không có ảnh nguồn để tạo biến thể local." };
+      const regenerated = await enhanceAndStoreSourceProductImage(supabase, postId, slot, src, {
+        generatedFrom: "PER_SLOT_SOURCE_REGENERATE",
+        overlay,
+        productName,
+        visualAngle: typeof meta.visual_angle === "string" ? meta.visual_angle : "source",
+        metadata: { ...meta, regenerated_at: new Date().toISOString(), per_slot_regenerate: true },
+      });
+      if (!regenerated.ok) return { ok: false, error: regenerated.error ?? "Tạo lại ảnh nguồn thất bại." };
+    } else {
+      const prompt =
+        asset.prompt?.trim() ||
+        `Clean product-related lifestyle image for "${productName}", realistic social-commerce style, uncluttered background.`;
+      const regenerated = await generateAndStoreImageAsset(
+        supabase,
+        postId,
+        slot,
+        {
+          prompt,
+          caption_overlay: overlay,
+          visual_angle: typeof meta.visual_angle === "string" ? meta.visual_angle : "benefit",
+        },
+        { force: true },
+      );
+      if (!regenerated.ok) return { ok: false, error: regenerated.error ?? "Tạo lại ảnh AI thất bại." };
+    }
+
+    const { data: assetRows } = await supabase
+      .from("post_creative_assets")
+      .select("status, image_url, source_type, metadata")
+      .eq("generated_post_id", postId)
+      .eq("status", "READY");
+    const list = (assetRows ?? []) as Array<{ status: string; image_url: string | null; source_type: string | null; metadata: unknown }>;
+    const real = list.filter((a) => {
+      const m = a.metadata && typeof a.metadata === "object" ? (a.metadata as Record<string, unknown>) : {};
+      return !!a.image_url && m.mock !== true;
+    });
+    const productCount = real.filter((a) => a.source_type === "PRODUCT").length;
+    const aiCount = real.filter((a) => a.source_type === "AI_GENERATED").length;
+    const total = real.length;
+    const packScore = computePackQualityScore(list);
+    const packStatus = total >= 4 && productCount >= 1 ? "READY" : productCount === 0 ? "MISSING_PRODUCT_IMAGE" : total >= 1 ? "PARTIAL" : "FAILED";
+    await supabase
+      .from("generated_posts")
+      .update({
+        creative_pack_status: packStatus,
+        creative_pack_mode: "MIXED",
+        publish_mode: packStatus === "READY" ? "PHOTO_ALBUM" : "FEED",
+        creative_summary: `${total} ảnh (nguồn Shopee: ${productCount}, AI bám SP: ${aiCount}, score: ${packScore}).`,
+        creative_error: packStatus === "READY" ? null : `Chưa đủ ảnh bám sản phẩm: ${total}/4 (nguồn ${productCount}).`,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", postId);
+
+    await insertPostingLog(supabase, postId, "CREATIVE_PACK_SCORE_COMPUTED", packStatus === "READY" ? "SUCCESS" : "FAILED", `Creative pack score: ${packScore}.`, {
+      generated_post_id: postId,
+      creative_pack_score: packScore,
+      per_slot_regenerate: true,
+      slot_index: slot,
+    });
+
+    revalidatePath("/dashboard/posts");
+    revalidatePath("/dashboard/calendar");
+    return { ok: true, sourceType: asset.source_type ?? "UNKNOWN", v98CallUsed: asset.source_type === "AI_GENERATED" };
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Tạo lại ảnh slot ${slot} thất bại: ${m}` };
   }
 }
 

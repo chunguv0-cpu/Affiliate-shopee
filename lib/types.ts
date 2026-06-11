@@ -198,6 +198,7 @@ export type PostCreativeAsset = {
 
 /** Asset rút gọn đính kèm vào GeneratedPost cho UI. */
 export type CreativeAssetLite = {
+  id?: string;
   image_url: string | null;
   source_type: CreativeAssetSource;
   sort_order: number;

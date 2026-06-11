@@ -9,6 +9,7 @@ import {
   type ProductInput,
 } from "@/lib/ai/client";
 import {
+  computePackQualityScore,
   enhanceAndStoreSourceProductImage,
   generateAndStoreImageAsset,
   storeSourceProductImage,
@@ -35,7 +36,9 @@ const MAX_RETRY_DELAY_MS = readIntEnv("AI_JOB_MAX_RETRY_DELAY_MS", 15 * 60 * 100
 const FAST_SOURCE_ALBUM = readBoolEnv("AI_JOB_FAST_SOURCE_ALBUM", true);
 const FAST_SOURCE_ALBUM_MIN_IMAGES = readIntEnv("AI_JOB_FAST_SOURCE_ALBUM_MIN_IMAGES", 4, 1, 4);
 const ENHANCE_SOURCE_ALBUM = readBoolEnv("AI_JOB_ENHANCE_SOURCE_ALBUM", true);
-const HYBRID_AI_FIRST_ALBUM = readBoolEnv("AI_JOB_HYBRID_AI_FIRST_ALBUM", true);
+const DEFAULT_PACK_MODE = process.env.CREATIVE_DEFAULT_PACK_MODE?.trim().toUpperCase() || "2_SOURCE_2_AI";
+const SOURCE_FIRST_PACK = DEFAULT_PACK_MODE === "2_SOURCE_2_AI";
+const HYBRID_AI_FIRST_ALBUM = SOURCE_FIRST_PACK ? false : readBoolEnv("AI_JOB_HYBRID_AI_FIRST_ALBUM", true);
 const HYBRID_AI_IMAGE_COUNT = Math.min(readIntEnv("AI_JOB_HYBRID_AI_IMAGE_COUNT", 2, 1, 3), V98_MAX_IMAGE_CALLS_PER_POST);
 const HYBRID_SOURCE_IMAGE_COUNT = readIntEnv("AI_JOB_HYBRID_SOURCE_IMAGE_COUNT", 2, 1, 3);
 
@@ -619,7 +622,6 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           ? out.source_diagnostics.sourceImageOrigin
           : null;
       const canUseFastSourceAlbum =
-        !HYBRID_AI_FIRST_ALBUM &&
         FAST_SOURCE_ALBUM &&
         sourceImages.length >= FAST_SOURCE_ALBUM_MIN_IMAGES &&
         sourceOrigin !== "image_search_fallback";
@@ -702,15 +704,47 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         );
       }
 
+      const sourceFirstForPost = SOURCE_FIRST_PACK && sourceImages.length >= 2 && sourceOrigin !== "image_search_fallback";
+      if (sourceFirstForPost) {
+        await supabase.from("post_creative_assets").delete().eq("generated_post_id", postId).eq("sort_order", 2);
+        const promptForImage = bundle.image_prompts[1];
+        const metadata = {
+          source_image_origin: sourceOrigin,
+          exact_product_evidence: true,
+          source_first_pack: true,
+          enhanced: ENHANCE_SOURCE_ALBUM,
+        };
+        const enhanced = ENHANCE_SOURCE_ALBUM
+          ? await enhanceAndStoreSourceProductImage(supabase, postId, 2, sourceImages[1], {
+              generatedFrom: "SHOPEE_SOURCE_2_SOURCE_2_AI_ENHANCED",
+              overlay: overlays[1] ?? promptForImage?.caption_overlay ?? "",
+              productName: productInput.product_name,
+              visualAngle: promptForImage?.visual_angle ?? "source",
+              metadata,
+            })
+          : { ok: false, image_url: null, error: "source enhancement disabled" };
+        const stored = enhanced.ok
+          ? enhanced
+          : await storeSourceProductImage(supabase, postId, 2, sourceImages[1], {
+              generatedFrom: "SHOPEE_SOURCE_2_SOURCE_2_AI",
+              captionOverlay: overlays[1] ?? promptForImage?.caption_overlay ?? "",
+              productName: productInput.product_name,
+              visualAngle: promptForImage?.visual_angle ?? "source",
+              metadata: { ...metadata, enhanced: false, enhance_error: enhanced.error ?? null },
+            });
+        if (!stored.ok) return failStep(stored.error ?? "Luu anh nguon slot 2 that bai.");
+      }
+
       await insertPostingLog(supabase, postId, GROUNDED_GEN_STARTED, "SUCCESS", "Sinh ảnh AI bám sản phẩm + overlay.", { ai_job_id: jobId });
       return advance("IMAGE_1", {
         output: {
           ...out,
-          image_prompts: bundle.image_prompts.slice(0, HYBRID_AI_FIRST_ALBUM ? HYBRID_AI_IMAGE_COUNT : AI_IMAGE_COUNT),
+          image_prompts: bundle.image_prompts.slice(0, sourceFirstForPost ? 2 : HYBRID_AI_FIRST_ALBUM ? HYBRID_AI_IMAGE_COUNT : AI_IMAGE_COUNT),
           overlays,
           ai_score: bundle.score,
           should_publish: bundle.should_publish,
           hybrid_ai_first_album: HYBRID_AI_FIRST_ALBUM,
+          source_first_pack: sourceFirstForPost,
           hybrid_source_image_count: HYBRID_SOURCE_IMAGE_COUNT,
         },
       });
@@ -726,13 +760,15 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         source_images?: unknown;
         source_diagnostics?: Record<string, unknown>;
         hybrid_ai_first_album?: boolean;
+        source_first_pack?: boolean;
       };
       const prompts = Array.isArray(out.image_prompts) ? out.image_prompts : [];
       const overlays = Array.isArray(out.overlays) ? out.overlays : [];
       const p = prompts[idx - 1];
       const useHybrid = out.hybrid_ai_first_album === true;
-      const aiTargetCount = useHybrid ? HYBRID_AI_IMAGE_COUNT : AI_IMAGE_COUNT;
-      const sortOrder = useHybrid ? idx : idx + 1;
+      const sourceFirst = out.source_first_pack === true;
+      const aiTargetCount = sourceFirst ? 2 : useHybrid ? HYBRID_AI_IMAGE_COUNT : AI_IMAGE_COUNT;
+      const sortOrder = sourceFirst ? idx + 2 : useHybrid ? idx : idx + 1;
       if (!p || !p.prompt) return failStep(`Thiếu prompt ảnh #${idx}.`);
       // Gán overlay text -> generateAndStoreImageAsset sẽ render chữ lên ảnh.
       const pWithOverlay = { ...p, caption_overlay: overlays[idx - 1] ?? p.caption_overlay ?? "" };
@@ -782,6 +818,38 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         );
         return advance("FINALIZE", { attempts: 0 });
       }
+      if (!useHybrid && !sourceFirst && idx >= aiTargetCount) {
+        const sourceImages = cleanSourceImages(out.source_images);
+        const sourceOrigin =
+          out.source_diagnostics && typeof out.source_diagnostics.sourceImageOrigin === "string"
+            ? out.source_diagnostics.sourceImageOrigin
+            : null;
+        const tail = await storeSourceAlbumTail({
+          supabase,
+          postId,
+          sourceImages,
+          sourceOrigin,
+          productName: input.product_name ?? "San pham",
+          overlays: overlays.slice(aiTargetCount),
+          prompts: prompts.slice(aiTargetCount),
+          startSortOrder: aiTargetCount + 2,
+          count: Math.max(0, 4 - (aiTargetCount + 1)),
+          sourceStartIndex: 0,
+          enhanced: ENHANCE_SOURCE_ALBUM,
+        });
+        if (!tail.ok) {
+          await insertPostingLog(
+            supabase,
+            postId,
+            SOURCE_ALBUM_READY,
+            "FAILED",
+            `Khong luu du bien the anh nguon (${tail.storedCount}). ${tail.errors[0] ?? ""}`.slice(0, 1000),
+            { ai_job_id: jobId, source_image_count: sourceImages.length },
+          );
+          return failStep(`Chua luu du bien the anh nguon: ${tail.storedCount}.`);
+        }
+        return advance("FINALIZE", { attempts: 0 });
+      }
       const next = idx < aiTargetCount ? `IMAGE_${idx + 1}` : "FINALIZE";
       return advance(next, { attempts: 0 });
     }
@@ -800,6 +868,15 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       });
       const productCount = realReady.filter((a) => a.source_type === "PRODUCT").length;
       const total = realReady.length;
+      const aiCount = realReady.filter((a) => a.source_type === "AI_GENERATED").length;
+      const packScore = computePackQualityScore(
+        list.map((a) => ({
+          image_url: a.image_url,
+          source_type: a.source_type,
+          status: "READY",
+          metadata: a.metadata,
+        })),
+      );
 
       const out = (job.output ?? {}) as { ai_score?: number; should_publish?: boolean };
       const aiScore = typeof out.ai_score === "number" ? out.ai_score : 0;
@@ -814,7 +891,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
             creative_pack_mode: "MIXED",
             publish_mode: "PHOTO_ALBUM",
             status: postStatus,
-            creative_summary: `${total} ảnh (nguồn Shopee: ${productCount}, AI bám SP: ${total - productCount}).`,
+            creative_summary: `${total} ảnh (nguồn Shopee: ${productCount}, AI bám SP: ${aiCount}, score: ${packScore}).`,
             creative_error: null,
             updated_at: nowIso(),
           })
@@ -823,6 +900,11 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           .from("ai_jobs")
           .update({ status: "SUCCESS", step: "FINALIZE", progress_current: PROGRESS_TOTAL, finished_at: nowIso(), locked_at: null, error_message: null, updated_at: nowIso() })
           .eq("id", jobId);
+        await insertPostingLog(supabase, postId, "CREATIVE_PACK_SCORE_COMPUTED", "SUCCESS", `Creative pack score: ${packScore}.`, {
+          ai_job_id: jobId,
+          creative_pack_score: packScore,
+          v98_image_calls_used: aiCount,
+        });
         await insertPostingLog(supabase, postId, JOB_SUCCESS, "SUCCESS", `Job xong: ${total} ảnh (nguồn ${productCount}), post ${postStatus}.`, { ai_job_id: jobId });
         return { ok: true, jobId, step: "FINALIZE", status: "SUCCESS", progress: { current: PROGRESS_TOTAL, total: PROGRESS_TOTAL } };
       }
