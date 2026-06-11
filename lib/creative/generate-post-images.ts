@@ -134,7 +134,29 @@ export async function generateImagePromptPackForPost(ctx: PostImageContext): Pro
   }
 }
 
-/** Upload ảnh base64 lên Supabase Storage, trả public URL (hoặc null). */
+/** Upload buffer ảnh lên Supabase Storage, trả public URL (hoặc null). */
+async function uploadBuffer(
+  supabase: SupabaseClient,
+  postId: string,
+  index: number,
+  buffer: Buffer,
+  contentType: string,
+): Promise<string | null> {
+  try {
+    const ext = contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "png";
+    const path = `posts/${postId}/${index}.${ext}`;
+    const { error } = await supabase.storage
+      .from(CREATIVE_BUCKET)
+      .upload(path, buffer, { contentType, upsert: true });
+    if (error) return null;
+    const { data } = supabase.storage.from(CREATIVE_BUCKET).getPublicUrl(path);
+    return data?.publicUrl ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Upload ảnh base64 lên Storage. */
 async function uploadImage(
   supabase: SupabaseClient,
   postId: string,
@@ -142,14 +164,33 @@ async function uploadImage(
   b64: string,
 ): Promise<string | null> {
   try {
-    const buffer = Buffer.from(b64, "base64");
-    const path = `posts/${postId}/${index}.png`;
-    const { error } = await supabase.storage
-      .from(CREATIVE_BUCKET)
-      .upload(path, buffer, { contentType: "image/png", upsert: true });
-    if (error) return null;
-    const { data } = supabase.storage.from(CREATIVE_BUCKET).getPublicUrl(path);
-    return data?.publicUrl ?? null;
+    return await uploadBuffer(supabase, postId, index, Buffer.from(b64, "base64"), "image/png");
+  } catch {
+    return null;
+  }
+}
+
+/** Tải ảnh từ URL (V98/OpenAI) rồi re-host lên Storage để URL bền + Facebook fetch được. */
+async function uploadImageFromUrl(
+  supabase: SupabaseClient,
+  postId: string,
+  index: number,
+  url: string,
+): Promise<string | null> {
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 12000);
+    let res: Response;
+    try {
+      res = await fetch(url, { cache: "no-store", signal: controller.signal });
+    } finally {
+      clearTimeout(t);
+    }
+    if (!res.ok) return null;
+    const contentType = res.headers.get("content-type") ?? "image/png";
+    if (!contentType.startsWith("image/")) return null;
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return await uploadBuffer(supabase, postId, index, buffer, contentType);
   } catch {
     return null;
   }
@@ -197,8 +238,14 @@ export async function generatePostCreativePack(
     const r = results[i];
     let imageUrl: string | null = null;
     if (r.status === "READY") {
-      if (r.b64) imageUrl = await uploadImage(supabase, postId, i + 1, r.b64);
-      else if (r.url) imageUrl = r.url;
+      if (r.b64) {
+        imageUrl = await uploadImage(supabase, postId, i + 1, r.b64);
+      } else if (r.url && !r.mock) {
+        // Ảnh thật trả về dạng URL (V98/OpenAI) -> re-host để bền; fallback URL gốc nếu lỗi.
+        imageUrl = (await uploadImageFromUrl(supabase, postId, i + 1, r.url)) ?? r.url;
+      } else if (r.url) {
+        imageUrl = r.url; // mock placeholder, giữ nguyên
+      }
     }
     const ok = !!imageUrl;
     rows.push({

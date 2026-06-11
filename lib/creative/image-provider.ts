@@ -8,7 +8,7 @@ import OpenAI from "openai";
  * KHÔNG bao giờ throw — lỗi trả mảng rỗng để không làm hỏng việc tạo bài.
  */
 
-export type ImageProvider = "mock" | "openai" | "none";
+export type ImageProvider = "mock" | "openai" | "v98" | "none";
 
 export type GenerateImageInput = {
   product_name: string;
@@ -32,8 +32,9 @@ export type GeneratedImage = {
 
 export function getImageProvider(): ImageProvider {
   const raw = process.env.IMAGE_PROVIDER?.trim().toLowerCase();
-  if (raw === "openai" || raw === "none" || raw === "mock") return raw;
-  // Mặc định: có OPENAI_API_KEY thì sinh ảnh thật, ngược lại mock (chỉ để test).
+  if (raw === "openai" || raw === "v98" || raw === "none" || raw === "mock") return raw;
+  // Mặc định: ưu tiên V98 (nếu đang dùng), rồi OpenAI, cuối cùng mock.
+  if (process.env.V98_API_KEY?.trim() && process.env.V98_BASE_URL?.trim()) return "v98";
   if (process.env.OPENAI_API_KEY?.trim()) return "openai";
   return "mock";
 }
@@ -48,9 +49,28 @@ export type PromptImageResult = {
   status: "READY" | "FAILED";
 };
 
+/** Cấu hình endpoint sinh ảnh tương thích OpenAI (openai chính chủ hoặc V98). */
+function resolveImageConfig(
+  provider: ImageProvider,
+): { apiKey: string; baseURL?: string; model: string } | null {
+  if (provider === "v98") {
+    const apiKey = process.env.V98_API_KEY?.trim();
+    const baseURL = process.env.V98_BASE_URL?.trim();
+    // V98 dùng model ảnh riêng (KHÔNG dùng V98_MODEL vốn là model text gpt-5.5).
+    const model = process.env.V98_IMAGE_MODEL?.trim() || "dall-e-3";
+    if (!apiKey || !baseURL) return null;
+    return { apiKey, baseURL, model };
+  }
+  // openai chính chủ
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const model = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
+  if (!apiKey) return null;
+  return { apiKey, model };
+}
+
 /**
  * Sinh MỘT ảnh từ prompt do AI text tạo. KHÔNG throw.
- * - openai: trả base64 (response_format b64_json cho dall-e-*; gpt-image-* trả b64 mặc định).
+ * - openai / v98: gọi endpoint tương thích OpenAI (images.generate), trả base64 hoặc URL.
  * - mock: trả URL placeholder, mock=true (KHÔNG production-ready).
  */
 export async function generateImageFromPrompt(prompt: string): Promise<PromptImageResult> {
@@ -62,14 +82,14 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
     const url = `https://placehold.co/1024x1024/png?text=${encodeURIComponent("AI mock")}`;
     return { b64: null, url, mock: true, provider, model: "mock", status: "READY" };
   }
-  // openai
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  const model = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
-  if (!apiKey) return { b64: null, url: null, mock: false, provider, model, status: "FAILED" };
+
+  const cfg = resolveImageConfig(provider);
+  if (!cfg) return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED" };
+
   try {
-    const client = new OpenAI({ apiKey });
-    const isGptImage = /gpt-image/i.test(model);
-    const params: Record<string, unknown> = { model, prompt, n: 1, size: "1024x1024" };
+    const client = new OpenAI({ apiKey: cfg.apiKey, ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}) });
+    const isGptImage = /gpt-image/i.test(cfg.model);
+    const params: Record<string, unknown> = { model: cfg.model, prompt, n: 1, size: "1024x1024" };
     // dall-e-* cần response_format để lấy b64; gpt-image-* trả b64 mặc định.
     if (!isGptImage) params.response_format = "b64_json";
     const res = (await client.images.generate(
@@ -77,11 +97,11 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
     )) as unknown as { data?: Array<{ b64_json?: string | null; url?: string | null }> };
     const b64 = res.data?.[0]?.b64_json ?? null;
     const url = res.data?.[0]?.url ?? null;
-    if (b64) return { b64, url: null, mock: false, provider, model, status: "READY" };
-    if (url) return { b64: null, url, mock: false, provider, model, status: "READY" };
-    return { b64: null, url: null, mock: false, provider, model, status: "FAILED" };
+    if (b64) return { b64, url: null, mock: false, provider, model: cfg.model, status: "READY" };
+    if (url) return { b64: null, url, mock: false, provider, model: cfg.model, status: "READY" };
+    return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED" };
   } catch {
-    return { b64: null, url: null, mock: false, provider, model, status: "FAILED" };
+    return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED" };
   }
 }
 
