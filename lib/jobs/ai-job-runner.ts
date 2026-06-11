@@ -27,6 +27,8 @@ const IMAGE_STEP_COOLDOWN_MS = readIntEnv("AI_JOB_IMAGE_STEP_COOLDOWN_MS", 45 * 
 const JOB_RETRY_DELAY_MS = readIntEnv("AI_JOB_RETRY_DELAY_MS", 60 * 1000, 0, 30 * 60 * 1000);
 const RATE_LIMIT_RETRY_DELAY_MS = readIntEnv("AI_JOB_RATE_LIMIT_RETRY_DELAY_MS", 3 * 60 * 1000, 0, 60 * 60 * 1000);
 const MAX_RETRY_DELAY_MS = readIntEnv("AI_JOB_MAX_RETRY_DELAY_MS", 15 * 60 * 1000, 0, 2 * 60 * 60 * 1000);
+const FAST_SOURCE_ALBUM = readBoolEnv("AI_JOB_FAST_SOURCE_ALBUM", true);
+const FAST_SOURCE_ALBUM_MIN_IMAGES = readIntEnv("AI_JOB_FAST_SOURCE_ALBUM_MIN_IMAGES", 4, 1, 4);
 
 // Logs.
 const STEP_STARTED = "AI_JOB_STEP_STARTED";
@@ -42,6 +44,7 @@ const GROUNDING_MISSING = "PRODUCT_IMAGE_GROUNDING_MISSING";
 const GROUNDED_GEN_STARTED = "GROUNDED_IMAGE_GENERATION_STARTED";
 const GROUNDED_GEN_SUCCESS = "GROUNDED_IMAGE_GENERATION_SUCCESS";
 const GROUNDED_GEN_FAILED = "GROUNDED_IMAGE_GENERATION_FAILED";
+const SOURCE_ALBUM_READY = "SOURCE_PRODUCT_ALBUM_READY";
 
 // Tiến độ theo bước (INIT là setup, không tính).
 const STEP_PROGRESS: Record<string, number> = {
@@ -80,6 +83,14 @@ function readIntEnv(name: string, fallback: number, min: number, max: number): n
   return Math.min(max, Math.max(min, parsed));
 }
 
+function readBoolEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return fallback;
+}
+
 function elapsedMsSince(iso: string | null | undefined): number | null {
   if (!iso) return null;
   const time = new Date(iso).getTime();
@@ -115,6 +126,18 @@ function imageStepCooldownRemainingMs(step: string | null | undefined, updatedAt
 
 function secondsLeft(ms: number): number {
   return Math.max(1, Math.ceil(ms / 1000));
+}
+
+function cleanSourceImages(images: unknown): string[] {
+  if (!Array.isArray(images)) return [];
+  return Array.from(
+    new Set(
+      images
+        .filter((u): u is string => typeof u === "string")
+        .map((u) => u.trim())
+        .filter((u) => /^https?:\/\//i.test(u)),
+    ),
+  );
 }
 
 /** Chạy ĐÚNG MỘT bước của job. KHÔNG throw. */
@@ -474,7 +497,11 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
 
     // ---------- TEXT: caption + hook + prompt (grounded) ----------
     if (step === "TEXT") {
-      const out = (job.output ?? {}) as { visual_identity?: string };
+      const out = (job.output ?? {}) as {
+        visual_identity?: string;
+        source_images?: unknown;
+        source_diagnostics?: Record<string, unknown>;
+      };
       const productInput: ProductInput = {
         product_name: input.product_name ?? "Sản phẩm",
         affiliate_link: input.affiliate_link ?? "",
@@ -501,6 +528,77 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           updated_at: nowIso(),
         })
         .eq("id", postId);
+      const sourceImages = cleanSourceImages(out.source_images);
+      const sourceOrigin =
+        out.source_diagnostics && typeof out.source_diagnostics.sourceImageOrigin === "string"
+          ? out.source_diagnostics.sourceImageOrigin
+          : null;
+      const canUseFastSourceAlbum =
+        FAST_SOURCE_ALBUM &&
+        sourceImages.length >= FAST_SOURCE_ALBUM_MIN_IMAGES &&
+        sourceOrigin !== "image_search_fallback";
+      if (canUseFastSourceAlbum) {
+        await supabase
+          .from("post_creative_assets")
+          .delete()
+          .eq("generated_post_id", postId)
+          .gte("sort_order", 2)
+          .lte("sort_order", 4);
+
+        let storedCount = 0;
+        const storeErrors: string[] = [];
+        for (let i = 1; i < Math.min(4, sourceImages.length); i += 1) {
+          const stored = await storeSourceProductImage(supabase, postId, i + 1, sourceImages[i], {
+            generatedFrom: "SHOPEE_SOURCE_FAST_ALBUM",
+            captionOverlay: "Shopee product image",
+            metadata: {
+              source_image_origin: sourceOrigin,
+              exact_product_evidence: true,
+              fast_source_album: true,
+            },
+          });
+          if (stored.ok) storedCount += 1;
+          else if (stored.error) storeErrors.push(stored.error);
+        }
+
+        if (storedCount >= 3) {
+          await insertPostingLog(
+            supabase,
+            postId,
+            SOURCE_ALBUM_READY,
+            "SUCCESS",
+            "Dung 4 anh goc Shopee/Open API lam album nhanh, bo qua provider tao anh de tranh 429.",
+            { ai_job_id: jobId, source_image_count: sourceImages.length },
+          );
+          return advance("FINALIZE", {
+            attempts: 0,
+            output: {
+              ...out,
+              image_prompts: bundle.image_prompts.slice(0, AI_IMAGE_COUNT),
+              overlays,
+              ai_score: bundle.score,
+              should_publish: bundle.should_publish,
+              fast_source_album: true,
+            },
+          });
+        }
+
+        await supabase
+          .from("post_creative_assets")
+          .delete()
+          .eq("generated_post_id", postId)
+          .gte("sort_order", 2)
+          .lte("sort_order", 4);
+        await insertPostingLog(
+          supabase,
+          postId,
+          SOURCE_ALBUM_READY,
+          "FAILED",
+          `Khong luu du anh goc cho fast album (${storedCount}/3). Fallback sang AI image. ${storeErrors[0] ?? ""}`.slice(0, 1000),
+          { ai_job_id: jobId, source_image_count: sourceImages.length },
+        );
+      }
+
       await insertPostingLog(supabase, postId, GROUNDED_GEN_STARTED, "SUCCESS", "Sinh ảnh AI bám sản phẩm + overlay.", { ai_job_id: jobId });
       return advance("IMAGE_1", {
         output: {
