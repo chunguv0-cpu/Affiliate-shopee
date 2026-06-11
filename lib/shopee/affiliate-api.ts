@@ -151,3 +151,38 @@ export async function searchProductOffers(
 
   return { ok: true, offers, raw: { count: offers.length, pageInfo: block.pageInfo } };
 }
+
+export type ShortLinkResult = {
+  ok: boolean;
+  shortLink: string | null;
+  error?: string | null;
+  raw?: unknown;
+};
+
+/**
+ * Chuyển 1 URL sản phẩm Shopee thành short link affiliate (generateShortLink mutation).
+ * Field schema có thể cần chỉnh sau khi test với key thật. KHÔNG throw.
+ */
+export async function generateAffiliateShortLink(
+  cred: ShopeeApiCredential,
+  opts: { originUrl: string; subIds?: string[] },
+): Promise<ShortLinkResult> {
+  const originUrl = (opts.originUrl ?? "").trim();
+  if (!originUrl) return { ok: false, shortLink: null, error: "Thiếu URL gốc." };
+  const subs = (opts.subIds ?? []).filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim().replace(/"/g, '\\"'));
+  const subIdsArg = subs.length > 0 ? `, subIds: [${subs.map((s) => `"${s}"`).join(", ")}]` : "";
+  const url = originUrl.replace(/"/g, '\\"');
+  const query = `mutation{
+    generateShortLink(input: { originUrl: "${url}"${subIdsArg} }) {
+      shortLink
+    }
+  }`;
+
+  const res = await callGraphql(cred, query);
+  if (!res.ok) return { ok: false, shortLink: null, error: res.error, raw: res.raw };
+  const data = res.data ?? {};
+  const block = (data.generateShortLink ?? {}) as Record<string, unknown>;
+  const shortLink = str(block.shortLink);
+  if (!shortLink) return { ok: false, shortLink: null, error: "API không trả về shortLink.", raw: res.raw };
+  return { ok: true, shortLink, raw: res.raw };
+}

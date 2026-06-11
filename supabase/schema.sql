@@ -450,3 +450,49 @@ create trigger trg_ai_jobs_updated_at
   before update on ai_jobs
   for each row
   execute function update_updated_at_column();
+
+-- =============================================================================
+-- 10) ai_campaign_runs (Phase 19) — AI Autopilot: chiến dịch chạy theo batch.
+--     Xem migration add_ai_campaign_runs.sql để biết các cột bổ sung vào
+--     products / generated_posts / ai_jobs / sourcing_candidates.
+-- =============================================================================
+create table if not exists ai_campaign_runs (
+  id                   uuid primary key default gen_random_uuid(),
+  title                text,
+  objective            text,
+  status               text not null default 'DRAFT',
+  mode                 text not null default 'WEEKLY',
+  start_date           date,
+  end_date             date,
+  target_customer      text,
+  budget_note          text,
+  ai_strategy          jsonb default '{}'::jsonb,
+  product_opportunities jsonb default '[]'::jsonb,
+  sourced_candidates   jsonb default '[]'::jsonb,
+  posting_plan         jsonb default '{}'::jsonb,
+  creative_direction   jsonb default '{}'::jsonb,
+  approved_at          timestamptz,
+  approved_by          text,
+  error_message        text,
+  current_step         text,
+  progress_current     integer not null default 0,
+  progress_total       integer not null default 0,
+  paused               boolean not null default false,
+  created_at           timestamptz not null default now(),
+  updated_at           timestamptz not null default now(),
+  constraint ai_campaign_runs_status_check check (status in (
+    'DRAFT','AI_PLANNING','WAITING_APPROVAL','APPROVED',
+    'SOURCING_PRODUCTS','CONVERTING_LINKS','CREATING_PRODUCTS',
+    'CREATING_POSTS','CREATING_CREATIVES','WAITING_POST_REVIEW',
+    'SCHEDULING','SCHEDULED','RUNNING','COMPLETED','FAILED','PAUSED'
+  ))
+);
+
+create index if not exists idx_ai_campaign_runs_status     on ai_campaign_runs (status);
+create index if not exists idx_ai_campaign_runs_created_at  on ai_campaign_runs (created_at desc);
+
+drop trigger if exists trg_ai_campaign_runs_updated_at on ai_campaign_runs;
+create trigger trg_ai_campaign_runs_updated_at
+  before update on ai_campaign_runs
+  for each row
+  execute function update_updated_at_column();

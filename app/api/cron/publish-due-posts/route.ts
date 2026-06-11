@@ -46,15 +46,40 @@ async function handle(request: Request) {
   try {
     const supabase = createSupabaseAdminClient();
 
-    // Tìm bài đến hạn: READY + should_publish + ai_score>=80 + scheduled_at<=now
-    const { data, error } = await supabase
+    const nowIso = new Date().toISOString();
+
+    // Phase 19: chỉ đăng bài ĐÃ DUYỆT (review_status=APPROVED). Bài chưa duyệt -> bỏ qua + log.
+    const { data: notApproved } = await supabase
       .from("generated_posts")
       .select("id")
       .eq("status", "READY")
       .eq("should_publish", true)
       .gte("ai_score", 80)
       .not("scheduled_at", "is", null)
-      .lte("scheduled_at", new Date().toISOString())
+      .lte("scheduled_at", nowIso)
+      .neq("review_status", "APPROVED")
+      .limit(20);
+    if (notApproved && notApproved.length > 0) {
+      await insertPostingLog(
+        supabase,
+        null,
+        "CRON_SKIPPED_NOT_APPROVED",
+        "SUCCESS",
+        `Bỏ qua ${notApproved.length} bài đến hạn nhưng chưa được duyệt (review_status != APPROVED).`,
+        { skipped: notApproved.length },
+      );
+    }
+
+    // Tìm bài đến hạn: READY + should_publish + ai_score>=80 + APPROVED + scheduled_at<=now
+    const { data, error } = await supabase
+      .from("generated_posts")
+      .select("id")
+      .eq("status", "READY")
+      .eq("should_publish", true)
+      .gte("ai_score", 80)
+      .eq("review_status", "APPROVED")
+      .not("scheduled_at", "is", null)
+      .lte("scheduled_at", nowIso)
       .order("scheduled_at", { ascending: true })
       .limit(1);
 

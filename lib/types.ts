@@ -36,6 +36,7 @@ export type Product = {
   image_url: string | null;
   status: ProductStatus;
   shopee_account_id?: string | null;
+  ai_campaign_run_id?: string | null;
   source_product_images?: unknown;
   source_capture_status?: "PENDING" | "CAPTURED" | "FAILED" | null;
   source_capture_method?: string | null;
@@ -126,6 +127,7 @@ export type AiJob = {
   progress_total: number;
   related_product_id: string | null;
   related_post_id: string | null;
+  ai_campaign_run_id?: string | null;
   input: unknown;
   output: unknown;
   error_message: string | null;
@@ -239,6 +241,11 @@ export type GeneratedPost = {
   creative_error?: string | null;
   creative_assets?: CreativeAssetLite[];
   active_job_id?: string | null;
+  // Phase 19 — Autopilot review queue + scheduling.
+  review_status?: ReviewStatus | null;
+  automation_status?: string | null;
+  auto_scheduled?: boolean | null;
+  ai_campaign_run_id?: string | null;
   created_at: string;
   updated_at: string;
   products?: {
@@ -389,4 +396,141 @@ export type PostingLog = {
   message: string | null;
   raw_response: unknown;
   created_at: string;
+};
+
+// ===========================================================================
+// Phase 19 — AI Campaign Autopilot
+// ===========================================================================
+
+/** Trạng thái duyệt bài (review queue "Chờ duyệt bài"). */
+export type ReviewStatus = "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "NEEDS_EDIT";
+
+export const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
+  PENDING_REVIEW: "Chờ duyệt",
+  APPROVED: "Đã duyệt",
+  REJECTED: "Từ chối",
+  NEEDS_EDIT: "Cần sửa",
+};
+
+/** Trạng thái của một chiến dịch autopilot (chạy theo batch). */
+export type CampaignRunStatus =
+  | "DRAFT"
+  | "AI_PLANNING"
+  | "WAITING_APPROVAL"
+  | "APPROVED"
+  | "SOURCING_PRODUCTS"
+  | "CONVERTING_LINKS"
+  | "CREATING_PRODUCTS"
+  | "CREATING_POSTS"
+  | "CREATING_CREATIVES"
+  | "WAITING_POST_REVIEW"
+  | "SCHEDULING"
+  | "SCHEDULED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "PAUSED";
+
+export const CAMPAIGN_RUN_STATUS_LABELS: Record<CampaignRunStatus, string> = {
+  DRAFT: "Nháp",
+  AI_PLANNING: "AI đang lập kế hoạch",
+  WAITING_APPROVAL: "Chờ duyệt chiến dịch",
+  APPROVED: "Đã duyệt chiến dịch",
+  SOURCING_PRODUCTS: "Đang tìm sản phẩm",
+  CONVERTING_LINKS: "Đang chuyển link affiliate",
+  CREATING_PRODUCTS: "Đang tạo sản phẩm",
+  CREATING_POSTS: "Đang tạo bài đăng",
+  CREATING_CREATIVES: "Đang tạo ảnh creative",
+  WAITING_POST_REVIEW: "Chờ duyệt bài",
+  SCHEDULING: "Đang xếp lịch",
+  SCHEDULED: "Đã xếp lịch",
+  RUNNING: "Đang đăng",
+  COMPLETED: "Hoàn tất",
+  FAILED: "Thất bại",
+  PAUSED: "Tạm dừng",
+};
+
+/** Một cơ hội sản phẩm do AI gợi ý trong chiến dịch. */
+export type ProductOpportunity = {
+  product_keyword: string;
+  category?: string | null;
+  reason?: string | null;
+  target_customer?: string | null;
+  pain_point?: string | null;
+  expected_content_angle?: string | null;
+  suggested_price_range?: string | null;
+  search_keywords?: string[];
+  priority?: string | null;
+};
+
+/** Trạng thái link của một ứng viên đã sourcing. */
+export type SourcedCandidateLinkStatus = "SOURCED" | "READY" | "LINK_CONVERSION_FAILED" | "NEEDS_PROVIDER";
+
+/** Một ứng viên sản phẩm đã tìm được (giữ trong ai_campaign_runs.sourced_candidates). */
+export type SourcedCandidate = {
+  key: string;
+  opportunity_index: number;
+  product_keyword: string;
+  product_name: string;
+  product_url: string | null;
+  item_id: string | null;
+  shop_id: string | null;
+  shop_name?: string | null;
+  image_urls: string[];
+  price_note: string | null;
+  category: string | null;
+  reason: string | null;
+  affiliate_link: string | null;
+  sub_id: string | null;
+  link_status: SourcedCandidateLinkStatus;
+  product_id: string | null;
+  score: number;
+};
+
+/** Kế hoạch đăng bài (windows + tần suất). */
+export type PostingPlan = {
+  days?: number;
+  posts_per_day?: number;
+  suggested_windows?: string[];
+};
+
+/** Bản ghi chiến dịch autopilot. */
+export type AiCampaignRun = {
+  id: string;
+  title: string | null;
+  objective: string | null;
+  status: CampaignRunStatus;
+  mode: string;
+  start_date: string | null;
+  end_date: string | null;
+  target_customer: string | null;
+  budget_note: string | null;
+  ai_strategy: unknown;
+  product_opportunities: ProductOpportunity[];
+  sourced_candidates: SourcedCandidate[];
+  posting_plan: PostingPlan;
+  creative_direction: unknown;
+  approved_at: string | null;
+  approved_by: string | null;
+  error_message: string | null;
+  current_step: string | null;
+  progress_current: number;
+  progress_total: number;
+  paused: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Bộ đếm tiến độ tính được cho 1 chiến dịch (dùng cho dashboard). */
+export type CampaignRunCounters = {
+  opportunities: number;
+  sourced: number;
+  linksConverted: number;
+  productsCreated: number;
+  postsCreated: number;
+  creativesReady: number;
+  postsWaitingReview: number;
+  postsApproved: number;
+  postsScheduled: number;
+  postsPublished: number;
 };

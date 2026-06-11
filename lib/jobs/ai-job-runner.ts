@@ -361,6 +361,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         .from("generated_posts")
         .insert({
           product_id: job.related_product_id,
+          ai_campaign_run_id: job.ai_campaign_run_id ?? null,
           status: "DRAFT",
           should_publish: false,
           ai_score: 0,
@@ -368,6 +369,9 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           creative_pack_mode: "MIXED",
           creative_min_assets: 4,
           publish_mode: "FEED",
+          // Autopilot: bài chờ duyệt; bài thủ công sẽ được set APPROVED ở FINALIZE.
+          review_status: job.ai_campaign_run_id ? "PENDING_REVIEW" : null,
+          automation_status: job.ai_campaign_run_id ? "WAITING_REVIEW" : null,
         })
         .select("id")
         .single();
@@ -883,7 +887,18 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       const shouldPublish = out.should_publish === true;
 
       if (total >= 4 && productCount >= 1) {
-        const postStatus: GeneratedPostStatus = aiScore >= 80 && shouldPublish ? "READY" : "REJECTED";
+        const isAutopilot = !!job.ai_campaign_run_id;
+        // Autopilot: pack đủ ảnh -> luôn READY và chờ NGƯỜI duyệt (không tự đăng theo ai_score).
+        // Thủ công: giữ hành vi cũ (READY nếu AI duyệt + score>=80), và set review_status=APPROVED
+        // để cron đăng được như trước (cron giờ yêu cầu review_status=APPROVED).
+        const postStatus: GeneratedPostStatus = isAutopilot
+          ? "READY"
+          : aiScore >= 80 && shouldPublish
+            ? "READY"
+            : "REJECTED";
+        const reviewPatch = isAutopilot
+          ? { review_status: "PENDING_REVIEW", automation_status: "WAITING_REVIEW" }
+          : { review_status: postStatus === "READY" ? "APPROVED" : "REJECTED" };
         await supabase
           .from("generated_posts")
           .update({
@@ -891,6 +906,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
             creative_pack_mode: "MIXED",
             publish_mode: "PHOTO_ALBUM",
             status: postStatus,
+            ...reviewPatch,
             creative_summary: `${total} ảnh (nguồn Shopee: ${productCount}, AI bám SP: ${aiCount}, score: ${packScore}).`,
             creative_error: null,
             updated_at: nowIso(),
@@ -905,6 +921,12 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           creative_pack_score: packScore,
           v98_image_calls_used: aiCount,
         });
+        if (isAutopilot) {
+          await insertPostingLog(supabase, postId, "POST_WAITING_REVIEW", "SUCCESS", `Bài đã sẵn ảnh, chờ duyệt. Score: ${packScore}.`, {
+            ai_job_id: jobId,
+            ai_campaign_run_id: job.ai_campaign_run_id,
+          });
+        }
         await insertPostingLog(supabase, postId, JOB_SUCCESS, "SUCCESS", `Job xong: ${total} ảnh (nguồn ${productCount}), post ${postStatus}.`, { ai_job_id: jobId });
         return { ok: true, jobId, step: "FINALIZE", status: "SUCCESS", progress: { current: PROGRESS_TOTAL, total: PROGRESS_TOTAL } };
       }
