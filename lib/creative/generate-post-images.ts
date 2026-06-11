@@ -1,6 +1,6 @@
 import "server-only";
 
-import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 import OpenAI from "openai";
@@ -19,6 +19,21 @@ import type { CreativePackStatus, PublishMode } from "@/lib/types";
 const MIN_ASSETS = 4;
 // Bucket Storage cho ảnh (HOTFIX 17.2.3: mặc định post-creatives). Có thể override bằng CREATIVE_BUCKET.
 const CREATIVE_BUCKET = process.env.CREATIVE_BUCKET?.trim() || "post-creatives";
+const require = createRequire(import.meta.url);
+const TextToSVG = require("text-to-svg") as {
+  loadSync: (file: string) => {
+    getPath: (
+      text: string,
+      options: {
+        x?: number;
+        y?: number;
+        fontSize?: number;
+        anchor?: string;
+        attributes?: Record<string, string>;
+      },
+    ) => string;
+  };
+};
 
 // Logs.
 const PROMPTS_CREATED = "POST_IMAGE_PROMPTS_CREATED";
@@ -245,33 +260,43 @@ async function fetchImageBuffer(url: string): Promise<ImageBufferOutcome> {
   }
 }
 
-function xmlEscape(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function shortText(value: string | null | undefined, fallback: string, max = 34): string {
   const clean = (value ?? "").replace(/\s+/g, " ").trim() || fallback;
   return clean.length > max ? `${clean.slice(0, max - 1).trim()}...` : clean;
 }
 
-function notoSansVietnameseFontData(): string {
+let textToSvgCache: ReturnType<typeof TextToSVG.loadSync> | null | undefined;
+
+function getTextToSvg(): ReturnType<typeof TextToSVG.loadSync> | null {
+  if (textToSvgCache !== undefined) return textToSvgCache;
   try {
     const fontPath = path.join(
       process.cwd(),
-      "node_modules",
-      "@fontsource",
-      "noto-sans",
-      "files",
-      "noto-sans-vietnamese-700-normal.woff2",
+      "public",
+      "fonts",
+      "NotoSans-Bold.ttf",
     );
-    return readFileSync(fontPath).toString("base64");
+    textToSvgCache = TextToSVG.loadSync(fontPath);
   } catch {
-    return "";
+    textToSvgCache = null;
   }
+  return textToSvgCache;
+}
+
+function textPath(
+  text: string,
+  options: { x: number; y: number; size: number; fill: string; anchor?: string },
+): string {
+  const renderer = getTextToSvg();
+  const safe = text.trim();
+  if (!renderer || !safe) return "";
+  return renderer.getPath(safe, {
+    x: options.x,
+    y: options.y,
+    fontSize: options.size,
+    anchor: options.anchor ?? "left top",
+    attributes: { fill: options.fill },
+  });
 }
 
 function buildEnhancementSvg(input: {
@@ -286,8 +311,8 @@ function buildEnhancementSvg(input: {
     { accent: "#16a34a", dark: "#14532d", soft: "#f0fdf4" },
   ];
   const p = palettes[(input.sortOrder - 1) % palettes.length];
-  const overlay = xmlEscape(shortText(input.overlay, "Đáng xem hôm nay", 28));
-  const product = xmlEscape(shortText(input.productName, "Sản phẩm nổi bật", 34));
+  const overlay = shortText(input.overlay, "Đáng xem hôm nay", 28);
+  const product = shortText(input.productName, "Sản phẩm nổi bật", 34);
   const badge =
     input.visualAngle === "detail"
       ? "Chi tiết đáng chú ý"
@@ -296,14 +321,12 @@ function buildEnhancementSvg(input: {
         : input.visualAngle === "lifestyle"
           ? "Dễ dùng mỗi ngày"
           : "Gợi ý hôm nay";
-  const fontData = notoSansVietnameseFontData();
-  const fontFace = fontData
-    ? `@font-face{font-family:'NotoVN';src:url(data:font/woff2;base64,${fontData}) format('woff2');font-weight:700;}`
-    : "";
+  const badgePath = textPath(badge, { x: 222, y: 86, size: 27, fill: "#ffffff", anchor: "center top" });
+  const overlayPath = textPath(overlay, { x: 104, y: 774, size: 48, fill: p.dark });
+  const productPath = textPath(product, { x: 106, y: 838, size: 25, fill: "#475569" });
   const svg = `
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <style>${fontFace} .vn{font-family:'NotoVN','Arial','Helvetica',sans-serif;font-weight:700;}</style>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#111827" flood-opacity="0.22"/>
     </filter>
@@ -316,13 +339,13 @@ function buildEnhancementSvg(input: {
   <rect x="0" y="610" width="1024" height="414" fill="url(#fade)"/>
   <g filter="url(#shadow)">
     <rect x="56" y="62" rx="24" ry="24" width="332" height="66" fill="${p.accent}"/>
-    <text class="vn" x="222" y="105" text-anchor="middle" font-size="27" fill="#ffffff">${xmlEscape(badge)}</text>
+    ${badgePath}
   </g>
   <g filter="url(#shadow)">
     <rect x="54" y="748" rx="30" ry="30" width="916" height="164" fill="#ffffff" fill-opacity="0.96"/>
     <rect x="54" y="748" rx="30" ry="30" width="16" height="164" fill="${p.accent}"/>
-    <text class="vn" x="104" y="822" font-size="48" fill="${p.dark}">${overlay}</text>
-    <text class="vn" x="106" y="870" font-size="25" fill="#475569">${product}</text>
+    ${overlayPath}
+    ${productPath}
   </g>
 </svg>`;
   return Buffer.from(svg);
