@@ -66,6 +66,7 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
               <div>HTTP: <span className="text-gray-800">{String(d.httpStatus ?? "—")}</span></div>
               <div>HTML length: <span className="text-gray-800">{String(d.htmlLength ?? 0)}</span></div>
               <div>shopId/itemId: <span className="text-gray-800">{String(d.detectedShopId ?? "—")} / {String(d.detectedItemId ?? "—")}</span></div>
+              <div className="sm:col-span-2">Path: <span className="break-all text-gray-800">{Array.isArray(d.pathSegments) ? (d.pathSegments as string[]).join(" / ") : "—"}</span></div>
               <div>Ảnh ứng viên: <span className="text-gray-800">{String(d.imageCandidatesCount ?? 0)}</span> · Hợp lệ: <span className="text-gray-800">{String(d.validImagesCount ?? 0)}</span></div>
               <div className="sm:col-span-2">Chiến lược đã thử: <span className="text-gray-800">{strategies.join(", ") || "—"}</span></div>
             </dl>

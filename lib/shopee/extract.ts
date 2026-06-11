@@ -16,6 +16,7 @@ export type ShopeeExtractDiagnostics = {
   htmlLength?: number;
   detectedShopId?: string | null;
   detectedItemId?: string | null;
+  pathSegments?: string[];
   imageCandidatesCount: number;
   validImagesCount: number;
   rejectedImages: Array<{ url: string; reason: string }>;
@@ -59,15 +60,39 @@ function titleTag(html: string): string | null {
   return m ? decodeEntities(m[1]) : null;
 }
 
-/** Parse shopId/itemId từ URL Shopee (nhiều dạng). */
+function pathSegmentsOf(url: string): string[] {
+  try {
+    return new URL(url).pathname.split("/").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Parse shopId/itemId từ URL Shopee (nhiều dạng).
+ * A. /product/{shopId}/{itemId}
+ * B. -i.{shopId}.{itemId}
+ * C. /{shopSlug}/{shopId}/{itemId}  (vd /opaanlp/198287126/22033662890)
+ * Test: "https://shopee.vn/opaanlp/198287126/22033662890?abc=1"
+ *   => { shopId: "198287126", itemId: "22033662890" }
+ */
 export function parseShopeeIds(url: string): { shopId: string | null; itemId: string | null } {
   if (!url) return { shopId: null, itemId: null };
-  // -i.{shopid}.{itemid}
+  // B) -i.{shopid}.{itemid}
   let m = url.match(/-i\.(\d+)\.(\d+)/);
   if (m) return { shopId: m[1], itemId: m[2] };
-  // /product/{shopid}/{itemid}
+  // A) /product/{shopid}/{itemid}
   m = url.match(/\/product\/(\d+)\/(\d+)/);
   if (m) return { shopId: m[1], itemId: m[2] };
+  // C) /{shopSlug}/{shopId}/{itemId} — 2 segment numeric cuối cùng.
+  const segs = pathSegmentsOf(url);
+  if (segs.length >= 2) {
+    const last = segs[segs.length - 1];
+    const secondLast = segs[segs.length - 2];
+    if (/^\d{5,}$/.test(last) && /^\d{5,}$/.test(secondLast)) {
+      return { shopId: secondLast, itemId: last };
+    }
+  }
   // query params
   try {
     const u = new URL(url);
@@ -78,6 +103,50 @@ export function parseShopeeIds(url: string): { shopId: string | null; itemId: st
     /* ignore */
   }
   return { shopId: null, itemId: null };
+}
+
+/**
+ * Strategy item-metadata-by-ids: gọi API item công khai của Shopee (không cookie/login).
+ * Có thể bị chặn -> trả null, ghi diagnostic, tiếp tục.
+ */
+async function fetchItemMetadata(
+  shopId: string,
+  itemId: string,
+): Promise<{ name: string | null; images: string[] } | null> {
+  const api = `https://shopee.vn/api/v4/item/get?itemid=${encodeURIComponent(itemId)}&shopid=${encodeURIComponent(shopId)}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(api, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": UA,
+        Accept: "application/json",
+        "x-api-source": "pc",
+        Referer: "https://shopee.vn/",
+      },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { data?: Record<string, unknown> } | null;
+    const d = json?.data;
+    if (!d || typeof d !== "object") return null;
+    const rawImages = Array.isArray((d as { images?: unknown }).images)
+      ? ((d as { images: unknown[] }).images as unknown[])
+      : (d as { image?: unknown }).image
+        ? [(d as { image: unknown }).image]
+        : [];
+    const images = rawImages
+      .filter((h): h is string => typeof h === "string" && h.length > 0)
+      .map((h) => (/^https?:\/\//i.test(h) ? h : IMG_CDN_BASE + h));
+    const name = typeof (d as { name?: unknown }).name === "string" ? ((d as { name: string }).name) : null;
+    return { name, images };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /** Resolve link affiliate -> URL cuối (follow redirect). Trả html luôn để tiết kiệm request. */
@@ -225,24 +294,42 @@ export async function extractShopeeProductImages(url: string): Promise<ShopeeExt
   diagnostics.httpStatus = resolved.status;
   diagnostics.strategiesTried.push("resolve-redirect");
 
-  const ids = parseShopeeIds(resolved.finalUrl) ;
+  diagnostics.pathSegments = pathSegmentsOf(resolved.finalUrl);
+  const ids = parseShopeeIds(resolved.finalUrl);
   diagnostics.detectedShopId = ids.shopId;
   diagnostics.detectedItemId = ids.itemId;
   diagnostics.strategiesTried.push("parse-ids");
 
-  const html = resolved.html;
-  if (!html) {
-    diagnostics.error = resolved.error ?? `Không đọc được HTML (HTTP ${resolved.status ?? "?"}).`;
-    return { ok: false, product_name: null, image_urls: [], diagnostics };
-  }
-  diagnostics.htmlLength = html.length;
+  const candidates: string[] = [];
+  let productName: string | null = null;
 
-  const productName = metaContent(html, "og:title") ?? titleTag(html);
-  const candidates = dedupe(collectCandidates(html, diagnostics.strategiesTried));
-  diagnostics.imageCandidatesCount = candidates.length;
+  // Strategy: item-metadata-by-ids (API công khai, có thể bị chặn).
+  if (ids.shopId && ids.itemId) {
+    diagnostics.strategiesTried.push("item-metadata-by-ids");
+    const meta = await fetchItemMetadata(ids.shopId, ids.itemId);
+    if (meta) {
+      productName = meta.name ?? productName;
+      candidates.push(...meta.images);
+    }
+  }
+
+  // Strategy: html-cdn-image-scan (meta + JSON + CDN regex + hash arrays).
+  const html = resolved.html;
+  if (html) {
+    diagnostics.htmlLength = html.length;
+    productName = productName ?? metaContent(html, "og:title") ?? titleTag(html);
+    diagnostics.strategiesTried.push("html-cdn-image-scan");
+    candidates.push(...collectCandidates(html, diagnostics.strategiesTried));
+  } else if (candidates.length === 0) {
+    diagnostics.error = resolved.error ?? `Không đọc được HTML (HTTP ${resolved.status ?? "?"}).`;
+    return { ok: false, product_name: productName, image_urls: [], diagnostics };
+  }
+
+  const deduped = dedupe(candidates);
+  diagnostics.imageCandidatesCount = deduped.length;
 
   const valid: string[] = [];
-  for (const c of candidates) {
+  for (const c of deduped) {
     if (isLikelyProductImage(c)) valid.push(c);
     else if (diagnostics.rejectedImages.length < 12) {
       diagnostics.rejectedImages.push({ url: c.slice(0, 200), reason: "không giống ảnh sản phẩm (logo/icon/khác CDN)" });
