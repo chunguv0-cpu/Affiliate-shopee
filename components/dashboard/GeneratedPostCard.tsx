@@ -181,15 +181,26 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
             </div>
 
             {realThumbs.length > 0 ? (
-              <div className="grid grid-cols-4 gap-2">
-                {realThumbs.slice(0, 4).map((a, i) => (
-                  <div key={i} className="relative">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={a.image_url as string} alt="" className="aspect-square w-full rounded-md border border-gray-200 object-cover" />
-                    <span className="absolute bottom-0.5 left-0.5 rounded bg-black/55 px-1 text-[10px] font-medium text-white">AI</span>
-                  </div>
-                ))}
-              </div>
+              <>
+                <p className="mb-1 text-xs text-gray-500">Ảnh 1: sản phẩm thật từ Shopee · Ảnh 2–4: AI bám sản phẩm (+ chữ).</p>
+                <div className="grid grid-cols-4 gap-2">
+                  {[...realThumbs]
+                    .sort((a, b) => a.sort_order - b.sort_order)
+                    .slice(0, 4)
+                    .map((a, i) => (
+                      <div key={i} className="relative">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={a.image_url as string} alt="" className="aspect-square w-full rounded-md border border-gray-200 object-cover" />
+                        <span className={`absolute bottom-0.5 left-0.5 rounded px-1 text-[10px] font-medium text-white ${a.source_type === "PRODUCT" ? "bg-emerald-600/80" : "bg-black/55"}`}>
+                          {a.source_type === "PRODUCT" ? "Shopee" : "AI"}
+                        </span>
+                        {a.source_type === "AI_GENERATED" && a.caption_overlay ? (
+                          <span className="absolute inset-x-0 top-0 truncate rounded-t-md bg-black/45 px-1 text-[9px] text-white">{a.caption_overlay}</span>
+                        ) : null}
+                      </div>
+                    ))}
+                </div>
+              </>
             ) : null}
 
             <div className="mt-2 space-y-1">

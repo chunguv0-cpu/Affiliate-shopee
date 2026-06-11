@@ -393,6 +393,58 @@ export async function summarizeProductVisualIdentity(
   }
 }
 
+/**
+ * HOTFIX 17.4 — Sinh 3 overlay text NGẮN (feature / usage / benefit) cho ảnh #2-4.
+ * KHÔNG throw. Fallback generic nếu AI lỗi.
+ */
+export async function generateOverlayTextPack(ctx: {
+  product_name: string;
+  target_customer?: string | null;
+  product_angle?: string | null;
+  visual_identity?: string | null;
+}): Promise<string[]> {
+  const fallback = ["Tiện lợi mỗi ngày", "Dễ dùng, gọn nhẹ", "Đáng để thử"];
+  const provider = getAIProvider();
+  if (provider === "mock") return fallback;
+  try {
+    const { apiKey, baseURL, model } = resolveProviderConfig(provider);
+    const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+    const sys =
+      "Bạn viết overlay text ngắn cho ảnh quảng cáo sản phẩm. Trả 3 câu: (1) feature, (2) usage, (3) benefit. " +
+      "Mỗi câu tiếng Việt, <= 6 từ, dễ đọc, KHÔNG bịa giá/thương hiệu/claim y tế. CHỈ trả JSON {\"overlays\":[\"\",\"\",\"\"]}.";
+    const user = [
+      `Sản phẩm: ${ctx.product_name}`,
+      `Tệp khách: ${ctx.target_customer ?? "(không rõ)"}`,
+      `Góc: ${ctx.product_angle ?? "(không rõ)"}`,
+      ctx.visual_identity ? `Nhận diện: ${ctx.visual_identity}` : "",
+      "Trả đúng 3 overlay (feature/usage/benefit). CHỈ JSON.",
+    ].filter(Boolean).join("\n");
+    const completion = await client.chat.completions.create({
+      model,
+      temperature: 0.6,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: user },
+      ],
+    });
+    const raw = completion.choices[0]?.message?.content ?? "";
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start === -1 || end === -1) return fallback;
+    const obj = JSON.parse(raw.slice(start, end + 1)) as { overlays?: unknown };
+    const arr = Array.isArray(obj.overlays) ? obj.overlays : [];
+    const out = arr
+      .map((x) => (typeof x === "string" ? x.trim() : ""))
+      .filter(Boolean)
+      .map((s) => s.split(/\s+/).slice(0, 7).join(" "));
+    if (out.length >= 3) return out.slice(0, 3);
+    return [...out, ...fallback].slice(0, 3);
+  } catch {
+    return fallback;
+  }
+}
+
 // ===========================================================================
 // Phase 11: suy luận thông tin sản phẩm từ link affiliate + metadata
 // ===========================================================================

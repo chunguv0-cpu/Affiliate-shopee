@@ -6,6 +6,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   generateAffiliateCaption,
   generateAffiliatePostBundle,
+  generateOverlayTextPack,
   summarizeProductVisualIdentity,
   type GeneratedCaptionResult,
   type ProductInput,
@@ -89,7 +90,7 @@ async function attachCreativeAssets(
   try {
     const { data } = await supabase
       .from("post_creative_assets")
-      .select("generated_post_id, image_url, source_type, sort_order, status")
+      .select("generated_post_id, image_url, source_type, sort_order, status, caption_overlay")
       .in("generated_post_id", ids)
       .order("sort_order", { ascending: true });
     const byPost = new Map<string, GeneratedPost["creative_assets"]>();
@@ -101,6 +102,7 @@ async function attachCreativeAssets(
         source_type: (a.source_type as "PRODUCT" | "FOUND" | "AI_GENERATED") ?? "AI_GENERATED",
         sort_order: typeof a.sort_order === "number" ? a.sort_order : 0,
         status: String(a.status ?? "READY"),
+        caption_overlay: (a.caption_overlay as string | null) ?? null,
       });
       byPost.set(pid, list);
     }
@@ -320,9 +322,18 @@ export async function regeneratePostCreativeAssets(postId: string): Promise<Rege
       },
       { visualIdentity: vi },
     );
+    const overlays = await generateOverlayTextPack({
+      product_name: productName,
+      target_customer: product?.target_customer ?? null,
+      product_angle: product?.product_angle ?? null,
+      visual_identity: vi,
+    });
     const prompts = bundle.image_prompts.slice(0, 3);
     for (let i = 0; i < prompts.length; i += 1) {
-      await generateAndStoreImageAsset(supabase, postId, i + 2, prompts[i]);
+      await generateAndStoreImageAsset(supabase, postId, i + 2, {
+        ...prompts[i],
+        caption_overlay: overlays[i] ?? prompts[i].caption_overlay ?? "",
+      });
     }
 
     // 4) Tính trạng thái.

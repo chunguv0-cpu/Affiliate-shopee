@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
   generateAffiliatePostBundle,
+  generateOverlayTextPack,
   summarizeProductVisualIdentity,
   type ProductInput,
 } from "@/lib/ai/client";
@@ -239,6 +240,13 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         price_note: input.price_note ?? null,
       };
       const bundle = await generateAffiliatePostBundle(productInput, { visualIdentity: out.visual_identity });
+      // Overlay text (feature/usage/benefit) cho ảnh #2-4.
+      const overlays = await generateOverlayTextPack({
+        product_name: productInput.product_name,
+        target_customer: productInput.target_customer,
+        product_angle: productInput.product_angle,
+        visual_identity: (out as { visual_identity?: string }).visual_identity,
+      });
       await supabase
         .from("generated_posts")
         .update({
@@ -250,11 +258,12 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           updated_at: nowIso(),
         })
         .eq("id", postId);
-      await insertPostingLog(supabase, postId, GROUNDED_GEN_STARTED, "SUCCESS", "Sinh ảnh AI bám sản phẩm.", { ai_job_id: jobId });
+      await insertPostingLog(supabase, postId, GROUNDED_GEN_STARTED, "SUCCESS", "Sinh ảnh AI bám sản phẩm + overlay.", { ai_job_id: jobId });
       return advance("IMAGE_1", {
         output: {
           ...out,
           image_prompts: bundle.image_prompts.slice(0, AI_IMAGE_COUNT),
+          overlays,
           ai_score: bundle.score,
           should_publish: bundle.should_publish,
         },
@@ -265,11 +274,17 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
     const imageStep = step.match(/^IMAGE_([1-3])$/);
     if (imageStep) {
       const idx = parseInt(imageStep[1], 10); // 1..3
-      const out = (job.output ?? {}) as { image_prompts?: Array<{ prompt: string; caption_overlay?: string; visual_angle?: string }> };
+      const out = (job.output ?? {}) as {
+        image_prompts?: Array<{ prompt: string; caption_overlay?: string; visual_angle?: string }>;
+        overlays?: string[];
+      };
       const prompts = Array.isArray(out.image_prompts) ? out.image_prompts : [];
+      const overlays = Array.isArray(out.overlays) ? out.overlays : [];
       const p = prompts[idx - 1];
       if (!p || !p.prompt) return failStep(`Thiếu prompt ảnh #${idx}.`);
-      const res = await generateAndStoreImageAsset(supabase, postId, idx + 1, p); // sort 2,3,4
+      // Gán overlay text -> generateAndStoreImageAsset sẽ render chữ lên ảnh.
+      const pWithOverlay = { ...p, caption_overlay: overlays[idx - 1] ?? p.caption_overlay ?? "" };
+      const res = await generateAndStoreImageAsset(supabase, postId, idx + 1, pWithOverlay); // sort 2,3,4
       if (!res.ok) {
         await insertPostingLog(supabase, postId, GROUNDED_GEN_FAILED, "FAILED", res.error ?? `Ảnh #${idx} lỗi.`, { ai_job_id: jobId });
         return failStep(res.error ?? `Sinh ảnh #${idx} thất bại.`);

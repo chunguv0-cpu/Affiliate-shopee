@@ -426,7 +426,12 @@ export async function generateAndStoreImageAsset(
   sortOrder: number,
   prompt: MinimalPrompt,
 ): Promise<{ ok: boolean; mock: boolean; image_url: string | null; error: string | null }> {
-  const r = await generateImageFromPrompt(prompt.prompt);
+  // HOTFIX 17.4 — nếu có overlay text thì yêu cầu model render chữ lên ảnh (vùng an toàn).
+  const overlay = (prompt.caption_overlay ?? "").trim();
+  const fullPrompt = overlay
+    ? `${prompt.prompt} IMPORTANT: render a SHORT Vietnamese caption text overlay reading exactly: "${overlay}". Place it in the top or bottom safe margin, clean modern social-media style, large legible sans-serif, high contrast, do NOT cover the product. Spell the Vietnamese text correctly.`
+    : prompt.prompt;
+  const r = await generateImageFromPrompt(fullPrompt);
   if (r.status !== "READY") {
     return { ok: false, mock: false, image_url: null, error: r.error ?? "Image generation failed." };
   }
