@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Không bundle puppeteer-core vào server bundle (connect tới remote Chromium).
+  serverExternalPackages: ["puppeteer-core"],
 };
 
 export default nextConfig;

@@ -69,6 +69,8 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
               <div className="sm:col-span-2">Path: <span className="break-all text-gray-800">{Array.isArray(d.pathSegments) ? (d.pathSegments as string[]).join(" / ") : "—"}</span></div>
               <div>Ảnh ứng viên: <span className="text-gray-800">{String(d.imageCandidatesCount ?? 0)}</span> · Hợp lệ: <span className="text-gray-800">{String(d.validImagesCount ?? 0)}</span></div>
               <div className="sm:col-span-2">Chiến lược đã thử: <span className="text-gray-800">{strategies.join(", ") || "—"}</span></div>
+              <div>Image provider: <span className="text-gray-800">{String(d.imageSourceProvider ?? "server_fetch")}</span></div>
+              <div>Browser render: <span className="text-gray-800">{d.browserExtractionTried ? `${String(d.browserExtractionStatus ?? "?")} (hợp lệ: ${String(d.browserValidImagesCount ?? 0)})` : "chưa thử"}</span></div>
             </dl>
             {showFull && rejected.length > 0 ? (
               <div className="mt-2">
@@ -81,9 +83,15 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
               </div>
             ) : null}
             {showFull ? (
-              <p className="mt-2 text-xs text-amber-700">
-                Gợi ý: Thử mở link trực tiếp, kiểm tra link affiliate đã resolve đúng sản phẩm, hoặc import lại link. Shopee có thể chặn server fetch.
-              </p>
+              <div className="mt-2 space-y-1 text-xs text-amber-700">
+                {d.imageSourceProvider !== "browserless" ? (
+                  <p>Server fetch không lấy được ảnh Shopee. Để tự động lấy ảnh thật, cần bật Browser Render Extractor (SHOPEE_IMAGE_SOURCE_PROVIDER=browserless + BROWSERLESS_WS_ENDPOINT).</p>
+                ) : (
+                  <p>Đã thử browser render nhưng chưa lấy được ảnh. Kiểm tra cấu hình Browserless / link sản phẩm.</p>
+                )}
+                <p>Không nên tạo ảnh AI mù nếu chưa có ảnh nguồn sản phẩm.</p>
+                <p>Gợi ý: mở link trực tiếp, kiểm tra link affiliate đã resolve đúng sản phẩm, hoặc import lại link.</p>
+              </div>
             ) : null}
           </div>
         );

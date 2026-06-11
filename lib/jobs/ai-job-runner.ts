@@ -10,6 +10,7 @@ import {
 } from "@/lib/ai/client";
 import { generateAndStoreImageAsset, storeSourceProductImage } from "@/lib/creative/generate-post-images";
 import { insertPostingLog } from "@/lib/posts/log";
+import { extractShopeeImagesWithBrowser, getShopeeImageSourceProvider } from "@/lib/shopee/browser-extract";
 import { isLikelyProductImage } from "@/lib/shopee/enrich";
 import { extractShopeeProductImages } from "@/lib/shopee/extract";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -215,21 +216,48 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         else if (typeof prod?.image_url === "string" && isLikelyProductImage(prod.image_url)) images = [prod.image_url];
       }
 
-      // Strategy B-E: trích từ trang Shopee nếu chưa có.
+      // Strategy server_fetch (resolve + meta + api + html scan).
+      let finalUrl = link;
       if (images.length === 0) {
         const ext = await extractShopeeProductImages(link);
         diagnostics = ext.diagnostics;
-        productUrl = ext.diagnostics.finalUrl ?? null;
+        finalUrl = ext.diagnostics.finalUrl ?? link;
+        productUrl = finalUrl;
         images = ext.image_urls;
-        if (images.length > 0 && job.related_product_id) {
-          await supabase
-            .from("products")
-            .update({ source_product_images: images, image_url: images[0], updated_at: nowIso() })
-            .eq("id", job.related_product_id);
-        }
       }
 
-      const baseOutput = { ...((job.output as object) ?? {}), source_images: images, source_diagnostics: diagnostics, product_url: productUrl };
+      // Strategy B: browser-render-gallery (chỉ khi server fetch trống + provider browserless).
+      let browserDiag: Record<string, unknown> | null = null;
+      const provider = getShopeeImageSourceProvider();
+      if (images.length === 0 && provider === "browserless") {
+        const b = await extractShopeeImagesWithBrowser(finalUrl);
+        browserDiag = {
+          browserExtractionTried: true,
+          browserExtractionStatus: b.status,
+          browserExtractionError: b.error,
+          browserImageCandidatesCount: b.candidatesCount,
+          browserValidImagesCount: b.validCount,
+          sourceStrategy: b.ok ? "browser-render-gallery" : undefined,
+        };
+        if (b.ok) images = b.image_urls;
+      }
+
+      // Lưu ảnh nguồn vào product nếu có.
+      if (images.length > 0 && job.related_product_id) {
+        await supabase
+          .from("products")
+          .update({ source_product_images: images, image_url: images[0], updated_at: nowIso() })
+          .eq("id", job.related_product_id);
+      }
+
+      const combinedDiag = {
+        ...(diagnostics && typeof diagnostics === "object" ? (diagnostics as Record<string, unknown>) : {}),
+        imageSourceProvider: provider,
+        browserExtractionTried: browserDiag !== null,
+        ...(browserDiag ?? {}),
+        firstValidImages: images.slice(0, 5),
+      };
+      const baseOutput = { ...((job.output as object) ?? {}), source_images: images, source_diagnostics: combinedDiag, product_url: productUrl };
       // Luôn ghi diagnostics vào output để UI xem được khi fail.
       await supabase.from("ai_jobs").update({ output: baseOutput, updated_at: nowIso() }).eq("id", jobId);
 
