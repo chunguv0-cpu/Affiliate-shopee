@@ -57,7 +57,7 @@ function resolveImageConfig(
     const apiKey = process.env.V98_API_KEY?.trim();
     const baseURL = process.env.V98_BASE_URL?.trim();
     // V98 dùng model ảnh riêng (KHÔNG dùng V98_MODEL vốn là model text gpt-5.5).
-    const model = process.env.V98_IMAGE_MODEL?.trim() || "dall-e-3";
+    const model = process.env.V98_IMAGE_MODEL?.trim() || "gpt-image-2";
     if (!apiKey || !baseURL) return null;
     return { apiKey, baseURL, model };
   }
