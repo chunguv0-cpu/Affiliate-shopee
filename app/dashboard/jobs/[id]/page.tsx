@@ -109,6 +109,15 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
                   <div>Proxy auth: <span className="text-gray-800">{d.browserlessProxyAuth ? "có" : "không"}</span></div>
                 </>
               ) : null}
+              {d.imageSearchFallbackTried ? (
+                <div>Image search fallback: <span className="text-gray-800">{String(d.imageSearchFallbackProvider ?? "auto")} (valid: {String(d.imageSearchValidCount ?? 0)})</span></div>
+              ) : null}
+              {d.imageSearchConfiguredProviders ? (
+                <div>Search providers: <span className="text-gray-800">{Array.isArray(d.imageSearchConfiguredProviders) ? (d.imageSearchConfiguredProviders as string[]).join(", ") || "none" : String(d.imageSearchConfiguredProviders)}</span></div>
+              ) : null}
+              {d.imageSearchSkipped ? (
+                <div>Search skipped: <span className="text-gray-800">{String(d.imageSearchSkipped)}</span></div>
+              ) : null}
             </dl>
             {showFull && rejected.length > 0 ? (
               <div className="mt-2">

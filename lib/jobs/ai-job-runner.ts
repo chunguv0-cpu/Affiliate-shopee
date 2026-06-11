@@ -13,6 +13,7 @@ import { insertPostingLog } from "@/lib/posts/log";
 import { extractShopeeImagesWithBrowser, getShopeeImageSourceProvider } from "@/lib/shopee/browser-extract";
 import { isLikelyProductImage } from "@/lib/shopee/image-url";
 import { extractShopeeProductImages, toCanonicalShopeeProductUrl } from "@/lib/shopee/extract";
+import { findProductImagesViaSearch } from "@/lib/shopee/search-image-fallback";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { AiJob, AiJobStatus, GeneratedPostStatus } from "@/lib/types";
 
@@ -205,10 +206,11 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       let productUrl: string | null = null;
       let productOriginalUrl: string | null = null;
       let productAffiliateLink: string | null = null;
+      let productName: string | null = null;
       if (job.related_product_id) {
         const { data: prod } = await supabase
           .from("products")
-          .select("image_url, source_product_images, original_url, affiliate_link")
+          .select("product_name, image_url, source_product_images, original_url, affiliate_link")
           .eq("id", job.related_product_id)
           .single();
         const stored = Array.isArray(prod?.source_product_images)
@@ -216,6 +218,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           : [];
         if (stored.length > 0) images = stored;
         else if (typeof prod?.image_url === "string" && isLikelyProductImage(prod.image_url)) images = [prod.image_url];
+        productName = typeof prod?.product_name === "string" ? prod.product_name : null;
         productOriginalUrl = typeof prod?.original_url === "string" ? prod.original_url : null;
         productAffiliateLink = typeof prod?.affiliate_link === "string" ? prod.affiliate_link : null;
       }
@@ -284,6 +287,24 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       }
 
       // Lưu ảnh nguồn vào product nếu có.
+      // Strategy C: image-search fallback. Chạy sau cùng khi Shopee page/API/browser đều bị chặn.
+      let imageSearchDiag: Record<string, unknown> | null = null;
+      if (images.length === 0) {
+        const diagRecord = diagnostics && typeof diagnostics === "object" ? (diagnostics as Record<string, unknown>) : {};
+        const searchFallback = await findProductImagesViaSearch({
+          productName,
+          productUrl: finalUrl,
+          shopId: typeof diagRecord.detectedShopId === "string" ? diagRecord.detectedShopId : null,
+          itemId: typeof diagRecord.detectedItemId === "string" ? diagRecord.detectedItemId : null,
+        });
+        imageSearchDiag = {
+          imageSearchFallbackTried: true,
+          sourceStrategy: searchFallback.ok ? "image-search-fallback" : undefined,
+          ...searchFallback.diagnostics,
+        };
+        if (searchFallback.ok) images = searchFallback.image_urls;
+      }
+
       if (images.length > 0 && job.related_product_id) {
         await supabase
           .from("products")
@@ -297,6 +318,8 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         sourceLinkCandidates: sourceLinks.length,
         browserExtractionTried: browserDiag !== null,
         ...(browserDiag ?? {}),
+        imageSearchFallbackTried: imageSearchDiag !== null,
+        ...(imageSearchDiag ?? {}),
         firstValidImages: images.slice(0, 5),
       };
       const baseOutput = { ...((job.output as object) ?? {}), source_images: images, source_diagnostics: combinedDiag, product_url: productUrl };
