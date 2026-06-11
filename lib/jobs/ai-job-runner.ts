@@ -34,6 +34,9 @@ const MAX_RETRY_DELAY_MS = readIntEnv("AI_JOB_MAX_RETRY_DELAY_MS", 15 * 60 * 100
 const FAST_SOURCE_ALBUM = readBoolEnv("AI_JOB_FAST_SOURCE_ALBUM", true);
 const FAST_SOURCE_ALBUM_MIN_IMAGES = readIntEnv("AI_JOB_FAST_SOURCE_ALBUM_MIN_IMAGES", 4, 1, 4);
 const ENHANCE_SOURCE_ALBUM = readBoolEnv("AI_JOB_ENHANCE_SOURCE_ALBUM", true);
+const HYBRID_AI_FIRST_ALBUM = readBoolEnv("AI_JOB_HYBRID_AI_FIRST_ALBUM", true);
+const HYBRID_AI_IMAGE_COUNT = readIntEnv("AI_JOB_HYBRID_AI_IMAGE_COUNT", 2, 1, 3);
+const HYBRID_SOURCE_IMAGE_COUNT = readIntEnv("AI_JOB_HYBRID_SOURCE_IMAGE_COUNT", 2, 1, 3);
 
 // Logs.
 const STEP_STARTED = "AI_JOB_STEP_STARTED";
@@ -146,6 +149,77 @@ function cleanSourceImages(images: unknown): string[] {
 }
 
 /** Chạy ĐÚNG MỘT bước của job. KHÔNG throw. */
+async function storeSourceAlbumTail(options: {
+  supabase: SupabaseClient;
+  postId: string;
+  sourceImages: string[];
+  sourceOrigin: string | null;
+  productName: string;
+  overlays: string[];
+  prompts: Array<{ caption_overlay?: string | null; visual_angle?: string | null }>;
+  startSortOrder: number;
+  count: number;
+  sourceStartIndex?: number;
+  enhanced: boolean;
+}): Promise<{ ok: boolean; storedCount: number; errors: string[] }> {
+  const {
+    supabase,
+    postId,
+    sourceImages,
+    sourceOrigin,
+    productName,
+    overlays,
+    prompts,
+    startSortOrder,
+    count,
+    sourceStartIndex = 1,
+    enhanced: useEnhancement,
+  } = options;
+  await supabase
+    .from("post_creative_assets")
+    .delete()
+    .eq("generated_post_id", postId)
+    .gte("sort_order", startSortOrder)
+    .lt("sort_order", startSortOrder + count);
+
+  let storedCount = 0;
+  const errors: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const src = sourceImages[sourceStartIndex + i] ?? sourceImages[i] ?? sourceImages[0];
+    if (!src) {
+      errors.push(`Missing source image ${sourceStartIndex + i}.`);
+      continue;
+    }
+    const sortOrder = startSortOrder + i;
+    const promptForImage = prompts[i];
+    const metadata = {
+      source_image_origin: sourceOrigin,
+      exact_product_evidence: true,
+      hybrid_ai_first_album: HYBRID_AI_FIRST_ALBUM,
+      enhanced: useEnhancement,
+    };
+    const enhanced = useEnhancement
+      ? await enhanceAndStoreSourceProductImage(supabase, postId, sortOrder, src, {
+          generatedFrom: HYBRID_AI_FIRST_ALBUM ? "SHOPEE_SOURCE_HYBRID_TAIL_ENHANCED" : "SHOPEE_SOURCE_FAST_ALBUM_ENHANCED",
+          overlay: overlays[i] ?? promptForImage?.caption_overlay ?? "",
+          productName,
+          visualAngle: promptForImage?.visual_angle ?? null,
+          metadata,
+        })
+      : { ok: false, image_url: null, error: "source enhancement disabled" };
+    const stored = enhanced.ok
+      ? enhanced
+      : await storeSourceProductImage(supabase, postId, sortOrder, src, {
+          generatedFrom: HYBRID_AI_FIRST_ALBUM ? "SHOPEE_SOURCE_HYBRID_TAIL" : "SHOPEE_SOURCE_FAST_ALBUM",
+          captionOverlay: "Shopee product image",
+          metadata: { ...metadata, enhanced: false, enhance_error: enhanced.error ?? null },
+        });
+    if (stored.ok) storedCount += 1;
+    else if (stored.error) errors.push(stored.error);
+  }
+  return { ok: storedCount >= count, storedCount, errors };
+}
+
 export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
   let supabase: SupabaseClient;
   try {
@@ -539,6 +613,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           ? out.source_diagnostics.sourceImageOrigin
           : null;
       const canUseFastSourceAlbum =
+        !HYBRID_AI_FIRST_ALBUM &&
         FAST_SOURCE_ALBUM &&
         sourceImages.length >= FAST_SOURCE_ALBUM_MIN_IMAGES &&
         sourceOrigin !== "image_search_fallback";
@@ -623,10 +698,12 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       return advance("IMAGE_1", {
         output: {
           ...out,
-          image_prompts: bundle.image_prompts.slice(0, AI_IMAGE_COUNT),
+          image_prompts: bundle.image_prompts.slice(0, HYBRID_AI_FIRST_ALBUM ? HYBRID_AI_IMAGE_COUNT : AI_IMAGE_COUNT),
           overlays,
           ai_score: bundle.score,
           should_publish: bundle.should_publish,
+          hybrid_ai_first_album: HYBRID_AI_FIRST_ALBUM,
+          hybrid_source_image_count: HYBRID_SOURCE_IMAGE_COUNT,
         },
       });
     }
@@ -638,20 +715,69 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       const out = (job.output ?? {}) as {
         image_prompts?: Array<{ prompt: string; caption_overlay?: string; visual_angle?: string }>;
         overlays?: string[];
+        source_images?: unknown;
+        source_diagnostics?: Record<string, unknown>;
+        hybrid_ai_first_album?: boolean;
       };
       const prompts = Array.isArray(out.image_prompts) ? out.image_prompts : [];
       const overlays = Array.isArray(out.overlays) ? out.overlays : [];
       const p = prompts[idx - 1];
+      const useHybrid = out.hybrid_ai_first_album === true;
+      const aiTargetCount = useHybrid ? HYBRID_AI_IMAGE_COUNT : AI_IMAGE_COUNT;
+      const sortOrder = useHybrid ? idx : idx + 1;
+      if (useHybrid) {
+        await supabase.from("post_creative_assets").delete().eq("generated_post_id", postId).eq("sort_order", sortOrder);
+      }
       if (!p || !p.prompt) return failStep(`Thiếu prompt ảnh #${idx}.`);
       // Gán overlay text -> generateAndStoreImageAsset sẽ render chữ lên ảnh.
       const pWithOverlay = { ...p, caption_overlay: overlays[idx - 1] ?? p.caption_overlay ?? "" };
-      const res = await generateAndStoreImageAsset(supabase, postId, idx + 1, pWithOverlay); // sort 2,3,4
+      const res = await generateAndStoreImageAsset(supabase, postId, sortOrder, pWithOverlay);
       if (!res.ok) {
         await insertPostingLog(supabase, postId, GROUNDED_GEN_FAILED, "FAILED", res.error ?? `Ảnh #${idx} lỗi.`, { ai_job_id: jobId });
         return failStep(res.error ?? `Sinh ảnh #${idx} thất bại.`);
       }
       await insertPostingLog(supabase, postId, GROUNDED_GEN_SUCCESS, "SUCCESS", `Ảnh AI #${idx} xong.`, { ai_job_id: jobId });
-      const next = idx < AI_IMAGE_COUNT ? `IMAGE_${idx + 1}` : "FINALIZE";
+      if (useHybrid && idx >= aiTargetCount) {
+        const sourceImages = cleanSourceImages(out.source_images);
+        const sourceOrigin =
+          out.source_diagnostics && typeof out.source_diagnostics.sourceImageOrigin === "string"
+            ? out.source_diagnostics.sourceImageOrigin
+            : null;
+        const tail = await storeSourceAlbumTail({
+          supabase,
+          postId,
+          sourceImages,
+          sourceOrigin,
+          productName: input.product_name ?? "San pham",
+          overlays: overlays.slice(aiTargetCount),
+          prompts: prompts.slice(aiTargetCount),
+          startSortOrder: aiTargetCount + 1,
+          count: HYBRID_SOURCE_IMAGE_COUNT,
+          sourceStartIndex: 1,
+          enhanced: ENHANCE_SOURCE_ALBUM,
+        });
+        if (!tail.ok) {
+          await insertPostingLog(
+            supabase,
+            postId,
+            SOURCE_ALBUM_READY,
+            "FAILED",
+            `Khong luu du anh goc cuoi album (${tail.storedCount}/${HYBRID_SOURCE_IMAGE_COUNT}). ${tail.errors[0] ?? ""}`.slice(0, 1000),
+            { ai_job_id: jobId, source_image_count: sourceImages.length },
+          );
+          return failStep(`Chua luu du anh goc cuoi album: ${tail.storedCount}/${HYBRID_SOURCE_IMAGE_COUNT}.`);
+        }
+        await insertPostingLog(
+          supabase,
+          postId,
+          SOURCE_ALBUM_READY,
+          "SUCCESS",
+          `Da them ${tail.storedCount} anh goc san pham vao cuoi album hybrid.`,
+          { ai_job_id: jobId, source_image_count: sourceImages.length },
+        );
+        return advance("FINALIZE", { attempts: 0 });
+      }
+      const next = idx < aiTargetCount ? `IMAGE_${idx + 1}` : "FINALIZE";
       return advance(next, { attempts: 0 });
     }
 
