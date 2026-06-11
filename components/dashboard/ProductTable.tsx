@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 
+import CaptureSourceButton from "@/components/dashboard/CaptureSourceButton";
 import EmptyState from "@/components/dashboard/EmptyState";
 import GeneratePostButton from "@/components/dashboard/GeneratePostButton";
 import LinkStatusBadge from "@/components/dashboard/LinkStatusBadge";
@@ -27,7 +28,15 @@ function formatDate(iso: string): string {
   return `${dd}/${mm}/${d.getFullYear()}`;
 }
 
-export default function ProductTable({ products }: { products: Product[] }) {
+export default function ProductTable({
+  products,
+  captureSecret,
+  appUrl,
+}: {
+  products: Product[];
+  captureSecret: string | null;
+  appUrl: string;
+}) {
   const [editing, setEditing] = useState<Product | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,6 +174,14 @@ export default function ProductTable({ products }: { products: Product[] }) {
                           {pending && deletingId === p.id ? "Đang xóa..." : "Xóa"}
                         </button>
                       </div>
+                      <CaptureSourceButton
+                        productId={p.id}
+                        productName={p.product_name}
+                        affiliateLink={p.affiliate_link}
+                        captureSecret={captureSecret}
+                        appUrl={appUrl}
+                        captured={Array.isArray(p.source_product_images) && p.source_product_images.length > 0}
+                      />
                       <GeneratePostButton productId={p.id} />
                     </div>
                   </td>

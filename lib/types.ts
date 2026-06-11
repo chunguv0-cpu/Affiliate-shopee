@@ -17,6 +17,10 @@ export type Product = {
   image_url: string | null;
   status: ProductStatus;
   source_product_images?: unknown;
+  source_capture_status?: "PENDING" | "CAPTURED" | "FAILED" | null;
+  source_capture_method?: string | null;
+  source_capture_note?: string | null;
+  source_captured_at?: string | null;
   created_at: string;
   updated_at: string;
 };

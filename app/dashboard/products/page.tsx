@@ -9,6 +9,8 @@ export const dynamic = "force-dynamic";
 export default async function ProductsPage() {
   const result = await getProducts();
   const products = result.ok ? result.products : [];
+  const captureSecret = process.env.PRODUCT_CAPTURE_SECRET?.trim() || null;
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || "";
 
   return (
     <div>
@@ -34,7 +36,7 @@ export default async function ProductsPage() {
         <ProductForm mode="create" />
       </div>
 
-      <ProductTable products={products} />
+      <ProductTable products={products} captureSecret={captureSecret} appUrl={appUrl} />
     </div>
   );
 }

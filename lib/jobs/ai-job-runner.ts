@@ -264,7 +264,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         await insertPostingLog(supabase, postId, SHOPEE_FETCH_FAILED, "FAILED", "Không lấy được ảnh sản phẩm thật.", { ai_job_id: jobId });
         await insertPostingLog(supabase, postId, GROUNDING_MISSING, "FAILED", MISSING_SOURCE_MSG, { ai_job_id: jobId });
         return failHard(
-          "Không lấy được ảnh sản phẩm thật từ Shopee. Có thể Shopee chặn server fetch hoặc link cần render bằng trình duyệt.",
+          "Chưa có ảnh nguồn sản phẩm. Hãy dùng nút 'Capture ảnh từ Shopee' (trang Sản phẩm) trên trình duyệt của bạn, sau đó tạo lại bài.",
           postId,
           "MISSING_PRODUCT_IMAGE",
         );

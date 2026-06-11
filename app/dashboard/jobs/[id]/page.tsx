@@ -84,13 +84,11 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
             ) : null}
             {showFull ? (
               <div className="mt-2 space-y-1 text-xs text-amber-700">
-                {d.imageSourceProvider !== "browserless" ? (
-                  <p>Server fetch không lấy được ảnh Shopee. Để tự động lấy ảnh thật, cần bật Browser Render Extractor (SHOPEE_IMAGE_SOURCE_PROVIDER=browserless + BROWSERLESS_WS_ENDPOINT).</p>
-                ) : (
-                  <p>Đã thử browser render nhưng chưa lấy được ảnh. Kiểm tra cấu hình Browserless / link sản phẩm.</p>
-                )}
+                <p>
+                  Server không lấy được ảnh Shopee. Hãy mở sản phẩm trên trình duyệt và dùng nút{" "}
+                  <Link href="/dashboard/products" className="font-medium underline">Capture ảnh từ Shopee (trang Sản phẩm)</Link>, rồi tạo lại bài.
+                </p>
                 <p>Không nên tạo ảnh AI mù nếu chưa có ảnh nguồn sản phẩm.</p>
-                <p>Gợi ý: mở link trực tiếp, kiểm tra link affiliate đã resolve đúng sản phẩm, hoặc import lại link.</p>
               </div>
             ) : null}
           </div>
