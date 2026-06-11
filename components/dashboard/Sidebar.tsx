@@ -13,6 +13,7 @@ export type NavItem = {
 export const NAV_ITEMS: NavItem[] = [
   { label: "Tổng quan", href: "/dashboard", icon: "📊" },
   { label: "Vận hành hôm nay", href: "/dashboard/ops", icon: "🎯" },
+  { label: "Tài khoản Shopee", href: "/dashboard/shopee-accounts", icon: "🔑" },
   { label: "Sản phẩm", href: "/dashboard/products", icon: "🛍️" },
   { label: "Affiliate Links", href: "/dashboard/affiliate-links", icon: "🔗" },
   { label: "Nhập link", href: "/dashboard/import-products", icon: "📥" },

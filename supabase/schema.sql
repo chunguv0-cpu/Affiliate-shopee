@@ -33,6 +33,8 @@ create table if not exists products (
   product_angle   text,
   image_url       text,
   status          text not null default 'NEW',
+  -- Phase 18: tài khoản Shopee đã quét ra sản phẩm này.
+  shopee_account_id uuid,
   -- Hotfix 17.3: ảnh thật của sản phẩm Shopee (để grounding ảnh AI).
   source_product_images jsonb default '[]'::jsonb,
   -- Phase 17.7: capture ảnh từ trình duyệt người dùng.
@@ -384,6 +386,30 @@ create index if not exists idx_sourcing_created_at     on sourcing_candidates (c
 drop trigger if exists trg_sourcing_updated_at on sourcing_candidates;
 create trigger trg_sourcing_updated_at
   before update on sourcing_candidates
+  for each row
+  execute function update_updated_at_column();
+
+-- =============================================================================
+-- 8b) shopee_accounts (Phase 18) — nhiều tài khoản Shopee, API riêng từng tài khoản.
+-- =============================================================================
+create table if not exists shopee_accounts (
+  id            uuid primary key default gen_random_uuid(),
+  label         text not null,
+  app_id        text not null,
+  app_secret    text not null,
+  api_endpoint  text default 'https://open-api.affiliate.shopee.vn/graphql',
+  is_default    boolean not null default false,
+  status        text not null default 'ACTIVE',
+  note          text,
+  last_used_at  timestamptz,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  constraint shopee_accounts_status_check check (status in ('ACTIVE', 'DISABLED'))
+);
+create index if not exists idx_shopee_accounts_status on shopee_accounts (status);
+drop trigger if exists trg_shopee_accounts_updated_at on shopee_accounts;
+create trigger trg_shopee_accounts_updated_at
+  before update on shopee_accounts
   for each row
   execute function update_updated_at_column();
 

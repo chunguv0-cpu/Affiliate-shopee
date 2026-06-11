@@ -1,5 +1,24 @@
 export type ProductStatus = "NEW" | "ACTIVE" | "PAUSED" | "ARCHIVED";
 
+// ===========================================================================
+// Phase 18 — Quản lý tài khoản Shopee (API riêng từng tài khoản)
+// ===========================================================================
+export type ShopeeAccountStatus = "ACTIVE" | "DISABLED";
+
+/** Tài khoản Shopee (KHÔNG bao giờ trả app_secret ra client). */
+export type ShopeeAccount = {
+  id: string;
+  label: string;
+  app_id: string;
+  api_endpoint: string | null;
+  is_default: boolean;
+  status: ShopeeAccountStatus;
+  note: string | null;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 /** Trạng thái link affiliate (Phase 11). */
 export type LinkStatus = "NEED_CONVERT" | "READY" | "INVALID";
 
@@ -16,6 +35,7 @@ export type Product = {
   product_angle: string | null;
   image_url: string | null;
   status: ProductStatus;
+  shopee_account_id?: string | null;
   source_product_images?: unknown;
   source_capture_status?: "PENDING" | "CAPTURED" | "FAILED" | null;
   source_capture_method?: string | null;
