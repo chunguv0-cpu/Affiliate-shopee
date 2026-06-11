@@ -90,7 +90,7 @@ async function attachCreativeAssets(
   try {
     const { data } = await supabase
       .from("post_creative_assets")
-      .select("generated_post_id, image_url, source_type, sort_order, status, caption_overlay")
+      .select("generated_post_id, image_url, source_type, sort_order, status, caption_overlay, metadata")
       .in("generated_post_id", ids)
       .order("sort_order", { ascending: true });
     const byPost = new Map<string, GeneratedPost["creative_assets"]>();
@@ -103,6 +103,7 @@ async function attachCreativeAssets(
         sort_order: typeof a.sort_order === "number" ? a.sort_order : 0,
         status: String(a.status ?? "READY"),
         caption_overlay: (a.caption_overlay as string | null) ?? null,
+        metadata: a.metadata ?? null,
       });
       byPost.set(pid, list);
     }

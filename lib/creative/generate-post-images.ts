@@ -494,6 +494,7 @@ export async function storeSourceProductImage(
   postId: string,
   sortOrder: number,
   imageUrl: string,
+  options?: { generatedFrom?: string; captionOverlay?: string; metadata?: Record<string, unknown> },
 ): Promise<{ ok: boolean; image_url: string | null; error: string | null }> {
   const src = (imageUrl ?? "").trim();
   if (!/^https?:\/\//i.test(src)) return { ok: false, image_url: null, error: "Source image URL không hợp lệ." };
@@ -509,7 +510,13 @@ export async function storeSourceProductImage(
       caption_overlay: "Ảnh sản phẩm Shopee",
       sort_order: sortOrder,
       status: "READY",
-      metadata: { generated_from: "SHOPEE_SOURCE", mock: false, rehosted: !!up.url, origin: src },
+      metadata: {
+        generated_from: options?.generatedFrom ?? "SHOPEE_SOURCE",
+        mock: false,
+        rehosted: !!up.url,
+        origin: src,
+        ...(options?.metadata ?? {}),
+      },
     });
   } catch (err) {
     return { ok: false, image_url: null, error: err instanceof Error ? err.message.slice(0, 200) : "Insert source asset failed." };

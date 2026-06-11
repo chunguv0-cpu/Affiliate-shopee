@@ -183,6 +183,7 @@ export type CreativeAssetLite = {
   sort_order: number;
   status: string;
   caption_overlay?: string | null;
+  metadata?: unknown;
 };
 
 export type GeneratedPost = {

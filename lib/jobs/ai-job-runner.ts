@@ -207,6 +207,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       let productOriginalUrl: string | null = null;
       let productAffiliateLink: string | null = null;
       let productName: string | null = null;
+      let sourceImageOrigin: "stored" | "shopee_server" | "shopee_browser" | "image_search_fallback" | null = null;
       if (job.related_product_id) {
         const { data: prod } = await supabase
           .from("products")
@@ -216,8 +217,13 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         const stored = Array.isArray(prod?.source_product_images)
           ? (prod!.source_product_images as unknown[]).filter((u): u is string => typeof u === "string" && isLikelyProductImage(u))
           : [];
-        if (stored.length > 0) images = stored;
-        else if (typeof prod?.image_url === "string" && isLikelyProductImage(prod.image_url)) images = [prod.image_url];
+        if (stored.length > 0) {
+          images = stored;
+          sourceImageOrigin = "stored";
+        } else if (typeof prod?.image_url === "string" && isLikelyProductImage(prod.image_url)) {
+          images = [prod.image_url];
+          sourceImageOrigin = "stored";
+        }
         productName = typeof prod?.product_name === "string" ? prod.product_name : null;
         productOriginalUrl = typeof prod?.original_url === "string" ? prod.original_url : null;
         productAffiliateLink = typeof prod?.affiliate_link === "string" ? prod.affiliate_link : null;
@@ -245,6 +251,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           productUrl = finalUrl;
           if (ext.ok) {
             images = ext.image_urls;
+            sourceImageOrigin = "shopee_server";
             break;
           }
           const canonical = toCanonicalShopeeProductUrl(finalUrl);
@@ -258,6 +265,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
             productUrl = finalUrl;
             if (canonicalExt.ok) {
               images = canonicalExt.image_urls;
+              sourceImageOrigin = "shopee_server";
               break;
             }
           }
@@ -281,6 +289,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           };
           if (b.ok) {
             images = b.image_urls;
+            sourceImageOrigin = "shopee_browser";
             break;
           }
         }
@@ -302,10 +311,13 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           sourceStrategy: searchFallback.ok ? "image-search-fallback" : undefined,
           ...searchFallback.diagnostics,
         };
-        if (searchFallback.ok) images = searchFallback.image_urls;
+        if (searchFallback.ok) {
+          images = searchFallback.image_urls;
+          sourceImageOrigin = "image_search_fallback";
+        }
       }
 
-      if (images.length > 0 && job.related_product_id) {
+      if (images.length > 0 && job.related_product_id && sourceImageOrigin !== "image_search_fallback") {
         await supabase
           .from("products")
           .update({ source_product_images: images, image_url: images[0], updated_at: nowIso() })
@@ -320,6 +332,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         ...(browserDiag ?? {}),
         imageSearchFallbackTried: imageSearchDiag !== null,
         ...(imageSearchDiag ?? {}),
+        sourceImageOrigin,
         firstValidImages: images.slice(0, 5),
       };
       const baseOutput = { ...((job.output as object) ?? {}), source_images: images, source_diagnostics: combinedDiag, product_url: productUrl };
@@ -336,7 +349,17 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         );
       }
 
-      const stored = await storeSourceProductImage(supabase, postId, 1, images[0]);
+      const stored = await storeSourceProductImage(supabase, postId, 1, images[0], {
+        generatedFrom: sourceImageOrigin === "image_search_fallback" ? "IMAGE_SEARCH_FALLBACK" : "SHOPEE_SOURCE",
+        metadata: {
+          source_image_origin: sourceImageOrigin,
+          exact_product_evidence: sourceImageOrigin !== "image_search_fallback",
+          image_search_fallback_strict:
+            imageSearchDiag && typeof imageSearchDiag.imageSearchFallbackStrict === "boolean"
+              ? imageSearchDiag.imageSearchFallbackStrict
+              : undefined,
+        },
+      });
       if (!stored.ok) return failStep(stored.error ?? "Lưu ảnh nguồn thất bại.");
       await insertPostingLog(supabase, postId, SHOPEE_FETCH_SUCCESS, "SUCCESS", `Lấy ${images.length} ảnh sản phẩm Shopee.`, { ai_job_id: jobId });
       await insertPostingLog(supabase, postId, GROUNDING_READY, "SUCCESS", "Đã có ảnh nguồn để grounding.", { ai_job_id: jobId });

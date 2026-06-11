@@ -73,9 +73,14 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
   const realThumbs = readyAssets.filter((a) => !isMockUrl(a.image_url));
   const hasMockImage = readyAssets.some((a) => isMockUrl(a.image_url));
   // HOTFIX 17.3 — phân loại nguồn ảnh.
-  const sourceCount = realThumbs.filter((a) => a.source_type === "PRODUCT").length;
   const aiGroundedCount = realThumbs.filter((a) => a.source_type === "AI_GENERATED").length;
-  const hasGrounding = sourceCount > 0;
+  const assetMeta = (a: { metadata?: unknown }) => (a.metadata && typeof a.metadata === "object" ? (a.metadata as Record<string, unknown>) : {});
+  const sourceThumbs = realThumbs.filter((a) => a.source_type === "PRODUCT");
+  const sourceOrigins = sourceThumbs.map((a) => String(assetMeta(a).source_image_origin ?? assetMeta(a).generated_from ?? ""));
+  const isSearchFallbackOrigin = (origin: string) => origin === "image_search_fallback" || origin === "IMAGE_SEARCH_FALLBACK";
+  const hasShopeeGrounding = sourceOrigins.some((origin) => !isSearchFallbackOrigin(origin));
+  const hasSearchFallbackSource = sourceOrigins.some(isSearchFallbackOrigin);
+  const sourceCount = sourceThumbs.filter((a) => !isSearchFallbackOrigin(String(assetMeta(a).source_image_origin ?? assetMeta(a).generated_from ?? ""))).length;
   const packStatus = post.creative_pack_status ?? null;
   const showPack = creativeAssets.length > 0 || (packStatus && packStatus !== "PENDING");
   const canRegenerate = post.status !== "PUBLISHED" && post.status !== "PUBLISHING";
@@ -175,8 +180,11 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
               <span className="text-xs text-gray-500">
                 Ảnh nguồn Shopee: {sourceCount} · Ảnh AI bám sản phẩm: {aiGroundedCount}
               </span>
-              {hasGrounding ? (
+              {hasShopeeGrounding ? (
                 <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Có grounding từ link Shopee</span>
+              ) : null}
+              {hasSearchFallbackSource ? (
+                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">Ảnh nguồn từ search fallback</span>
               ) : null}
             </div>
 
@@ -192,7 +200,7 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={a.image_url as string} alt="" className="aspect-square w-full rounded-md border border-gray-200 object-cover" />
                         <span className={`absolute bottom-0.5 left-0.5 rounded px-1 text-[10px] font-medium text-white ${a.source_type === "PRODUCT" ? "bg-emerald-600/80" : "bg-black/55"}`}>
-                          {a.source_type === "PRODUCT" ? "Shopee" : "AI"}
+                          {a.source_type === "PRODUCT" ? (isSearchFallbackOrigin(String(assetMeta(a).source_image_origin ?? assetMeta(a).generated_from ?? "")) ? "Search" : "Shopee") : "AI"}
                         </span>
                         {a.source_type === "AI_GENERATED" && a.caption_overlay ? (
                           <span className="absolute inset-x-0 top-0 truncate rounded-t-md bg-black/45 px-1 text-[9px] text-white">{a.caption_overlay}</span>
