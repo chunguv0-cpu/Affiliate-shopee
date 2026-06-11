@@ -79,6 +79,40 @@ export type SourcingCandidate = {
   updated_at: string;
 };
 
+// ===========================================================================
+// Foundation — AI Job Queue
+// ===========================================================================
+export type AiJobStatus = "PENDING" | "RUNNING" | "WAITING_RETRY" | "SUCCESS" | "FAILED";
+
+export const AI_JOB_STATUS_LABELS: Record<AiJobStatus, string> = {
+  PENDING: "Chờ chạy",
+  RUNNING: "Đang chạy",
+  WAITING_RETRY: "Chờ thử lại",
+  SUCCESS: "Hoàn tất",
+  FAILED: "Thất bại",
+};
+
+export type AiJob = {
+  id: string;
+  job_type: string;
+  status: AiJobStatus;
+  step: string | null;
+  progress_current: number;
+  progress_total: number;
+  related_product_id: string | null;
+  related_post_id: string | null;
+  input: unknown;
+  output: unknown;
+  error_message: string | null;
+  attempts: number;
+  max_attempts: number;
+  locked_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type GeneratedPostStatus =
   | "DRAFT"
   | "READY"
@@ -176,6 +210,7 @@ export type GeneratedPost = {
   creative_summary?: string | null;
   creative_error?: string | null;
   creative_assets?: CreativeAssetLite[];
+  active_job_id?: string | null;
   created_at: string;
   updated_at: string;
   products?: {

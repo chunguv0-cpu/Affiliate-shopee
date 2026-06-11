@@ -141,6 +141,15 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
 
       {/* Body */}
       <div className="space-y-4 px-5 py-4">
+        {post.active_job_id ? (
+          <a
+            href={`/dashboard/jobs/${post.active_job_id}`}
+            className="block rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100"
+          >
+            🛠 AI đang xử lý ảnh — xem tiến trình job →
+          </a>
+        ) : null}
+
         {/* Phase 17 — Creative pack ảnh AI thật (gallery 4 ảnh) */}
         {showPack ? (
           <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-3">

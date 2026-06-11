@@ -417,6 +417,60 @@ export async function materializeImages(
 }
 
 /**
+ * Sinh + lưu MỘT ảnh (cho job runner — mỗi bước 1 ảnh). KHÔNG throw.
+ * Chỉ insert asset READY khi có image_url thật. Trả lỗi đọc được nếu fail.
+ */
+export async function generateAndStoreImageAsset(
+  supabase: SupabaseClient,
+  postId: string,
+  sortOrder: number,
+  prompt: MinimalPrompt,
+): Promise<{ ok: boolean; mock: boolean; image_url: string | null; error: string | null }> {
+  const r = await generateImageFromPrompt(prompt.prompt);
+  if (r.status !== "READY") {
+    return { ok: false, mock: false, image_url: null, error: r.error ?? "Image generation failed." };
+  }
+  let imageUrl: string | null = null;
+  let storageErr: string | null = null;
+  if (r.b64) {
+    const up = await uploadImage(supabase, postId, sortOrder, r.b64);
+    imageUrl = up.url;
+    storageErr = up.error;
+  } else if (r.url && !r.mock) {
+    const up = await uploadImageFromUrl(supabase, postId, sortOrder, r.url);
+    imageUrl = up.url ?? r.url;
+    if (!up.url) storageErr = up.error;
+  } else if (r.url) {
+    imageUrl = r.url; // mock placeholder
+  }
+  if (!imageUrl) {
+    return { ok: false, mock: r.mock, image_url: null, error: storageErr ?? "No image URL produced." };
+  }
+  try {
+    await supabase.from("post_creative_assets").insert({
+      generated_post_id: postId,
+      asset_type: "IMAGE",
+      source_type: "AI_GENERATED",
+      image_url: imageUrl,
+      prompt: prompt.prompt,
+      caption_overlay: prompt.caption_overlay ?? "",
+      sort_order: sortOrder,
+      status: "READY",
+      metadata: {
+        visual_angle: prompt.visual_angle ?? "",
+        provider: r.provider,
+        model: r.model,
+        generated_from: "AI_JOB",
+        mock: r.mock,
+      },
+    });
+  } catch (err) {
+    return { ok: false, mock: r.mock, image_url: null, error: err instanceof Error ? err.message.slice(0, 200) : "Insert asset failed." };
+  }
+  return { ok: true, mock: r.mock, image_url: imageUrl, error: null };
+}
+
+/**
  * Dựng pack từ context (tự sinh prompt pack rồi sinh ảnh). Dùng cho REGENERATE.
  * One-step flow truyền thẳng prompts từ 1 call text -> dùng materializeImages.
  */

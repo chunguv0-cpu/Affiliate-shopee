@@ -1,30 +1,28 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
-import { createAiPostWithCreatives } from "@/app/dashboard/posts/actions";
-
-type Feedback =
-  | { kind: "success"; imageCount: number }
-  | { kind: "error"; message: string };
+import { createAiPostImageJob } from "@/app/dashboard/jobs/actions";
 
 export default function GeneratePostButton({
   productId,
 }: {
   productId: string;
 }) {
+  const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   function handleClick() {
-    setFeedback(null);
+    setError(null);
     startTransition(async () => {
-      const result = await createAiPostWithCreatives(productId);
+      const result = await createAiPostImageJob(productId);
       if (result.ok) {
-        setFeedback({ kind: "success", imageCount: result.imageCount });
+        // Không chờ sinh ảnh — chuyển sang trang tiến trình job (AI chạy theo bước).
+        router.push(`/dashboard/jobs/${result.jobId}`);
       } else {
-        setFeedback({ kind: "error", message: result.error });
+        setError(result.error);
       }
     });
   }
@@ -37,22 +35,11 @@ export default function GeneratePostButton({
         disabled={pending}
         className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {pending ? "Đang tạo caption và 4 ảnh..." : "🤖 Tạo bài đăng AI"}
+        {pending ? "Đã tạo job, AI đang xử lý..." : "🤖 Tạo bài đăng AI"}
       </button>
 
-      {feedback?.kind === "success" ? (
-        <span className="text-right text-xs text-green-600">
-          Đã tạo bài + {feedback.imageCount}/4 ảnh.{" "}
-          <Link href="/dashboard/posts" className="underline hover:text-green-700">
-            Xem bài
-          </Link>
-        </span>
-      ) : null}
-
-      {feedback?.kind === "error" ? (
-        <span className="max-w-[200px] text-right text-xs text-red-600">
-          {feedback.message}
-        </span>
+      {error ? (
+        <span className="max-w-[200px] text-right text-xs text-red-600">{error}</span>
       ) : null}
     </div>
   );

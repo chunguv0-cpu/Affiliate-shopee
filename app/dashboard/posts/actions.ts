@@ -101,6 +101,22 @@ async function attachCreativeAssets(
   } catch {
     /* bảng chưa tồn tại / lỗi -> bỏ qua */
   }
+
+  // Gắn job AI đang chạy (nếu có) để UI link tới trang tiến trình.
+  try {
+    const { data: jobs } = await supabase
+      .from("ai_jobs")
+      .select("id, related_post_id, status")
+      .in("related_post_id", ids)
+      .in("status", ["PENDING", "RUNNING", "WAITING_RETRY"]);
+    const jobByPost = new Map<string, string>();
+    for (const j of (jobs ?? []) as Array<{ id: string; related_post_id: string | null }>) {
+      if (j.related_post_id && !jobByPost.has(j.related_post_id)) jobByPost.set(j.related_post_id, j.id);
+    }
+    for (const p of posts) p.active_job_id = jobByPost.get(p.id) ?? null;
+  } catch {
+    /* bỏ qua */
+  }
 }
 
 /**
