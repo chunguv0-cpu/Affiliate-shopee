@@ -37,13 +37,15 @@ export default function AiJobProgress({
   const active = ACTIVE.includes(status);
 
   const [auto, setAuto] = useState(true);
+  const [notice, setNotice] = useState<string | null>(null);
 
   function runStep() {
     if (running.current) return;
     running.current = true;
     startTransition(async () => {
       try {
-        await runCurrentJobStep(jobId);
+        const result = await runCurrentJobStep(jobId);
+        setNotice(result.message ?? (!result.ok ? result.error ?? null : null));
       } finally {
         running.current = false;
         router.refresh();
@@ -93,6 +95,7 @@ export default function AiJobProgress({
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} className="h-3.5 w-3.5" />
             Tự chạy mỗi 5s
           </label>
+          {notice ? <p className="w-full text-xs text-amber-700">{notice}</p> : null}
         </div>
       ) : status === "SUCCESS" ? (
         <p className="mt-4 text-sm text-green-700">

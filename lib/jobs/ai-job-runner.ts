@@ -22,7 +22,11 @@ const JOB_TYPE = "CREATE_AI_POST_WITH_IMAGES";
 const PROGRESS_TOTAL = 7;
 const STALE_MS = 5 * 60 * 1000;
 // 1 ảnh thật Shopee + 3 ảnh AI bám sản phẩm = 4.
-const AI_IMAGE_COUNT = 3;
+const AI_IMAGE_COUNT = readIntEnv("AI_JOB_AI_IMAGE_COUNT", 3, 1, 3);
+const IMAGE_STEP_COOLDOWN_MS = readIntEnv("AI_JOB_IMAGE_STEP_COOLDOWN_MS", 45 * 1000, 0, 10 * 60 * 1000);
+const JOB_RETRY_DELAY_MS = readIntEnv("AI_JOB_RETRY_DELAY_MS", 60 * 1000, 0, 30 * 60 * 1000);
+const RATE_LIMIT_RETRY_DELAY_MS = readIntEnv("AI_JOB_RATE_LIMIT_RETRY_DELAY_MS", 3 * 60 * 1000, 0, 60 * 60 * 1000);
+const MAX_RETRY_DELAY_MS = readIntEnv("AI_JOB_MAX_RETRY_DELAY_MS", 15 * 60 * 1000, 0, 2 * 60 * 60 * 1000);
 
 // Logs.
 const STEP_STARTED = "AI_JOB_STEP_STARTED";
@@ -68,6 +72,51 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function readIntEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function elapsedMsSince(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const time = new Date(iso).getTime();
+  if (!Number.isFinite(time)) return null;
+  return Date.now() - time;
+}
+
+function isRateLimitMessage(message: string | null | undefined): boolean {
+  return /(^|\D)429($|\D)|rate.?limit|too many|try again|overload|quota/i.test(message ?? "");
+}
+
+function retryDelayMs(job: Pick<AiJob, "attempts" | "error_message">): number {
+  const base = isRateLimitMessage(job.error_message) ? RATE_LIMIT_RETRY_DELAY_MS : JOB_RETRY_DELAY_MS;
+  const attempts = Math.max(1, job.attempts ?? 1);
+  const delay = base * 2 ** (attempts - 1);
+  return Math.min(MAX_RETRY_DELAY_MS, delay);
+}
+
+function retryRemainingMs(job: Pick<AiJob, "status" | "attempts" | "error_message" | "updated_at">): number {
+  if (job.status !== "WAITING_RETRY") return 0;
+  const elapsed = elapsedMsSince(job.updated_at);
+  if (elapsed === null) return 0;
+  return Math.max(0, retryDelayMs(job) - elapsed);
+}
+
+function imageStepCooldownRemainingMs(step: string | null | undefined, updatedAt: string | null | undefined): number {
+  const match = (step ?? "").match(/^IMAGE_([2-9]\d*)$/);
+  if (!match) return 0;
+  const elapsed = elapsedMsSince(updatedAt);
+  if (elapsed === null) return 0;
+  return Math.max(0, IMAGE_STEP_COOLDOWN_MS - elapsed);
+}
+
+function secondsLeft(ms: number): number {
+  return Math.max(1, Math.ceil(ms / 1000));
+}
+
 /** Chạy ĐÚNG MỘT bước của job. KHÔNG throw. */
 export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
   let supabase: SupabaseClient;
@@ -84,6 +133,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
   }
   const job = data as AiJob;
   const progress = { current: job.progress_current, total: job.progress_total || PROGRESS_TOTAL };
+  const step = job.step || "INIT";
 
   if (job.status === "SUCCESS" || job.status === "FAILED") {
     return { ok: true, jobId, step: job.step, status: job.status, progress, message: "Job đã kết thúc." };
@@ -95,7 +145,30 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
     }
   }
 
-  const step = job.step || "INIT";
+  const retryRemaining = retryRemainingMs(job);
+  if (retryRemaining > 0) {
+    return {
+      ok: true,
+      jobId,
+      step,
+      status: "WAITING_RETRY",
+      progress,
+      error: job.error_message ?? undefined,
+      message: `Dang cho provider ha rate-limit, thu lai sau khoang ${secondsLeft(retryRemaining)}s.`,
+    };
+  }
+
+  const imageCooldownRemaining = imageStepCooldownRemainingMs(step, job.updated_at);
+  if (job.status === "RUNNING" && imageCooldownRemaining > 0) {
+    return {
+      ok: true,
+      jobId,
+      step,
+      status: "RUNNING",
+      progress,
+      message: `Dang gian nhip sinh anh, chay buoc ke sau khoang ${secondsLeft(imageCooldownRemaining)}s.`,
+    };
+  }
 
   await supabase
     .from("ai_jobs")
@@ -522,13 +595,29 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
 /** Tìm 1 job để chạy: PENDING/WAITING_RETRY trước, rồi RUNNING quá hạn (stale). */
 export async function pickAndRunNextJob(): Promise<RunStepResult | { ok: true; message: string }> {
   const supabase = createSupabaseAdminClient();
-  const { data: ready } = await supabase
+  const { data: pending } = await supabase
     .from("ai_jobs")
     .select("id")
-    .in("status", ["PENDING", "WAITING_RETRY"])
+    .eq("status", "PENDING")
     .order("created_at", { ascending: true })
     .limit(1);
-  let jobId = ready?.[0]?.id as string | undefined;
+  let jobId = pending?.[0]?.id as string | undefined;
+
+  if (!jobId) {
+    const { data: candidates } = await supabase
+      .from("ai_jobs")
+      .select("id,status,step,attempts,error_message,locked_at,updated_at")
+      .in("status", ["WAITING_RETRY", "RUNNING"])
+      .is("locked_at", null)
+      .order("created_at", { ascending: true })
+      .limit(20);
+    const ready = ((candidates ?? []) as AiJob[]).find((candidate) => {
+      if (retryRemainingMs(candidate) > 0) return false;
+      if (imageStepCooldownRemainingMs(candidate.step, candidate.updated_at) > 0) return false;
+      return true;
+    });
+    jobId = ready?.id;
+  }
 
   if (!jobId) {
     const staleBefore = new Date(Date.now() - STALE_MS).toISOString();
