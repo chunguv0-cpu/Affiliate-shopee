@@ -54,6 +54,8 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
         const out = job.output && typeof job.output === "object" ? (job.output as Record<string, unknown>) : {};
         const d = out.source_diagnostics && typeof out.source_diagnostics === "object" ? (out.source_diagnostics as Record<string, unknown>) : null;
         if (!d) return null;
+        // Đã lấy được ảnh nguồn (stored/provider_api/...) -> ẩn card này, vì lỗi (nếu có) nằm ở bước sinh ảnh, không phải lấy ảnh Shopee.
+        if (d.sourceImageOrigin) return null;
         const rejected = Array.isArray(d.rejectedImages) ? (d.rejectedImages as Array<{ url: string; reason: string }>) : [];
         const strategies = Array.isArray(d.strategiesTried) ? (d.strategiesTried as string[]) : [];
         const showFull = (d.validImagesCount as number) === 0 || job.status === "FAILED";

@@ -125,32 +125,43 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
     return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED", error };
   }
 
-  try {
-    const client = new OpenAI({ apiKey: cfg.apiKey, ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}) });
-    const isGptImage = /gpt-image/i.test(cfg.model);
-    const params: Record<string, unknown> = { model: cfg.model, prompt, n: 1, size: "1024x1024" };
-    // dall-e-* cần response_format để lấy b64; gpt-image-* trả b64 mặc định.
-    if (!isGptImage) params.response_format = "b64_json";
-    const res = (await client.images.generate(
-      params as unknown as Parameters<typeof client.images.generate>[0],
-    )) as unknown as { data?: Array<{ b64_json?: string | null; url?: string | null }> };
-    const b64 = res.data?.[0]?.b64_json ?? null;
-    const url = res.data?.[0]?.url ?? null;
-    if (b64) return { b64, url: null, mock: false, provider, model: cfg.model, status: "READY" };
-    if (url) return { b64: null, url, mock: false, provider, model: cfg.model, status: "READY" };
-    return {
-      b64: null,
-      url: null,
-      mock: false,
-      provider,
-      model: cfg.model,
-      status: "FAILED",
-      error: "No image URL or base64 returned from image model.",
-    };
-  } catch (err) {
-    const error = err instanceof Error ? err.message.slice(0, 300) : "Image API call failed.";
-    return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED", error };
+  const client = new OpenAI({ apiKey: cfg.apiKey, ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}) });
+  const isGptImage = /gpt-image/i.test(cfg.model);
+  const params: Record<string, unknown> = { model: cfg.model, prompt, n: 1, size: "1024x1024" };
+  // dall-e-* cần response_format để lấy b64; gpt-image-* trả b64 mặc định.
+  if (!isGptImage) params.response_format = "b64_json";
+
+  // V98 hay trả 429 "Something wrong, please try again" -> tự chờ giãn rồi thử lại.
+  const isRetryable = (e: unknown): boolean => {
+    const status = (e as { status?: number })?.status;
+    const msg = e instanceof Error ? e.message.toLowerCase() : "";
+    return status === 429 || status === 503 || /429|rate|too many|try again|overload|timeout|temporar/i.test(msg);
+  };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const DELAYS = [2000, 5000, 9000]; // backoff giữa các lần thử
+
+  let lastError = "Image API call failed.";
+  for (let attempt = 0; attempt <= DELAYS.length; attempt += 1) {
+    try {
+      const res = (await client.images.generate(
+        params as unknown as Parameters<typeof client.images.generate>[0],
+      )) as unknown as { data?: Array<{ b64_json?: string | null; url?: string | null }> };
+      const b64 = res.data?.[0]?.b64_json ?? null;
+      const url = res.data?.[0]?.url ?? null;
+      if (b64) return { b64, url: null, mock: false, provider, model: cfg.model, status: "READY" };
+      if (url) return { b64: null, url, mock: false, provider, model: cfg.model, status: "READY" };
+      lastError = "No image URL or base64 returned from image model.";
+      break; // không phải lỗi tạm thời -> dừng
+    } catch (err) {
+      lastError = err instanceof Error ? err.message.slice(0, 300) : "Image API call failed.";
+      if (attempt < DELAYS.length && isRetryable(err)) {
+        await sleep(DELAYS[attempt]);
+        continue;
+      }
+      break;
+    }
   }
+  return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED", error: lastError };
 }
 
 /** 4 phong cách ảnh creative (lifestyle / use-case / spotlight / benefit). */
