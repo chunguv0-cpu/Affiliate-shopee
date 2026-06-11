@@ -34,6 +34,19 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   status: ["status", "trạng thái", "trang thai"],
 };
 
+function normalizeHeader(h: string): string {
+  return h
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/₫/g, "")
+    .replace(/\s*\([^)]*\)\s*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** Tách CSV (hỗ trợ field bọc dấu nháy kép). */
 export function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
@@ -77,10 +90,24 @@ export function parseCsv(text: string): string[][] {
 
 /** Map header -> chỉ số cột theo alias. */
 function detectColumns(header: string[]): Record<string, number> {
-  const norm = header.map((h) => h.trim().toLowerCase());
+  const norm = header.map(normalizeHeader);
+  const extraAliases: Record<string, string[]> = {
+    sub_id: ["sub id1", "sub_id 1"],
+    orders: ["so luong", "quantity"],
+    commission: ["hoa hong rong tiep thi lien ket", "tong hoa hong san pham", "tong hoa hong don hang"],
+    revenue: ["gia tri don hang", "gia"],
+    report_date: ["thoi gian dat hang", "thoi gian hoan thanh", "thoi gian click"],
+    product_name: ["ten item"],
+    status: ["trang thai dat hang", "trang thai san pham lien ket"],
+  };
   const map: Record<string, number> = {};
   for (const [field, aliases] of Object.entries(COLUMN_ALIASES)) {
-    const idx = norm.findIndex((h) => aliases.includes(h));
+    const normalizedAliases = [...aliases, ...(extraAliases[field] ?? [])].map(normalizeHeader);
+    let idx = -1;
+    for (const alias of normalizedAliases) {
+      idx = norm.findIndex((h) => h === alias);
+      if (idx !== -1) break;
+    }
     if (idx !== -1) map[field] = idx;
   }
   return map;
@@ -150,6 +177,10 @@ export function mapReportRows(csvText: string): MapReportResult {
 
   const header = all[0];
   const cols = detectColumns(header);
+  const subIdIndexes = header
+    .map((h, idx) => ({ idx, key: normalizeHeader(h) }))
+    .filter(({ key }) => /^sub[_ ]?id[_ ]?[1-5]?$/.test(key))
+    .map(({ idx }) => idx);
 
   if (cols.sub_id === undefined && cols.affiliate_link === undefined) {
     warnings.push("Không có sub_id hoặc affiliate_link, khó map về bài đăng.");
@@ -160,6 +191,15 @@ export function mapReportRows(csvText: string): MapReportResult {
     if (idx === undefined) return null;
     const v = (r[idx] ?? "").trim();
     return v.length > 0 ? v : null;
+  };
+  const pickSubId = (r: string[]): string | null => {
+    const primary = pick(r, "sub_id");
+    if (primary) return primary;
+    for (const idx of subIdIndexes) {
+      const v = (r[idx] ?? "").trim();
+      if (v) return v;
+    }
+    return null;
   };
 
   const rows: ReportRowInput[] = [];
@@ -172,7 +212,7 @@ export function mapReportRows(csvText: string): MapReportResult {
 
     rows.push({
       report_date: pick(r, "report_date"),
-      sub_id: pick(r, "sub_id"),
+      sub_id: pickSubId(r),
       affiliate_link: pick(r, "affiliate_link"),
       product_name: pick(r, "product_name"),
       clicks: pick(r, "clicks"),
