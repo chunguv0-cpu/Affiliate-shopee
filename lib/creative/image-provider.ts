@@ -138,7 +138,8 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
     return status === 429 || status === 503 || /429|rate|too many|try again|overload|timeout|temporar/i.test(msg);
   };
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  const DELAYS = [2000, 5000, 9000]; // backoff giữa các lần thử
+  // Backoff đủ dài để vượt rate-limit V98 (tổng ~37s, trong giới hạn function 60s).
+  const DELAYS = [4000, 10000, 22000];
 
   let lastError = "Image API call failed.";
   for (let attempt = 0; attempt <= DELAYS.length; attempt += 1) {
