@@ -81,6 +81,8 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
   const hasShopeeGrounding = sourceOrigins.some((origin) => !isSearchFallbackOrigin(origin));
   const hasSearchFallbackSource = sourceOrigins.some(isSearchFallbackOrigin);
   const sourceCount = sourceThumbs.filter((a) => !isSearchFallbackOrigin(String(assetMeta(a).source_image_origin ?? assetMeta(a).generated_from ?? ""))).length;
+  const overlayAppliedCount = realThumbs.filter((a) => assetMeta(a).local_overlay_applied === true).length;
+  const v98CallsUsed = realThumbs.filter((a) => a.source_type === "AI_GENERATED" && assetMeta(a).mock !== true).length;
   const packStatus = post.creative_pack_status ?? null;
   const showPack = creativeAssets.length > 0 || (packStatus && packStatus !== "PENDING");
   const canRegenerate = post.status !== "PUBLISHED" && post.status !== "PUBLISHING";
@@ -182,6 +184,12 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
               </span>
               {hasShopeeGrounding ? (
                 <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Có grounding từ link Shopee</span>
+              ) : null}
+              {overlayAppliedCount > 0 ? (
+                <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700">Overlay code</span>
+              ) : null}
+              {v98CallsUsed > 0 ? (
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">V98 calls: {v98CallsUsed}</span>
               ) : null}
               {hasSearchFallbackSource ? (
                 <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">Ảnh nguồn từ search fallback</span>

@@ -26,7 +26,8 @@ const JOB_TYPE = "CREATE_AI_POST_WITH_IMAGES";
 const PROGRESS_TOTAL = 7;
 const STALE_MS = 5 * 60 * 1000;
 // 1 ảnh thật Shopee + 3 ảnh AI bám sản phẩm = 4.
-const AI_IMAGE_COUNT = readIntEnv("AI_JOB_AI_IMAGE_COUNT", 3, 1, 3);
+const V98_MAX_IMAGE_CALLS_PER_POST = readIntEnv("V98_MAX_IMAGE_CALLS_PER_POST", 2, 1, 4);
+const AI_IMAGE_COUNT = Math.min(readIntEnv("AI_JOB_AI_IMAGE_COUNT", 3, 1, 3), V98_MAX_IMAGE_CALLS_PER_POST);
 const IMAGE_STEP_COOLDOWN_MS = readIntEnv("AI_JOB_IMAGE_STEP_COOLDOWN_MS", 45 * 1000, 0, 10 * 60 * 1000);
 const JOB_RETRY_DELAY_MS = readIntEnv("AI_JOB_RETRY_DELAY_MS", 60 * 1000, 0, 30 * 60 * 1000);
 const RATE_LIMIT_RETRY_DELAY_MS = readIntEnv("AI_JOB_RATE_LIMIT_RETRY_DELAY_MS", 3 * 60 * 1000, 0, 60 * 60 * 1000);
@@ -35,7 +36,7 @@ const FAST_SOURCE_ALBUM = readBoolEnv("AI_JOB_FAST_SOURCE_ALBUM", true);
 const FAST_SOURCE_ALBUM_MIN_IMAGES = readIntEnv("AI_JOB_FAST_SOURCE_ALBUM_MIN_IMAGES", 4, 1, 4);
 const ENHANCE_SOURCE_ALBUM = readBoolEnv("AI_JOB_ENHANCE_SOURCE_ALBUM", true);
 const HYBRID_AI_FIRST_ALBUM = readBoolEnv("AI_JOB_HYBRID_AI_FIRST_ALBUM", true);
-const HYBRID_AI_IMAGE_COUNT = readIntEnv("AI_JOB_HYBRID_AI_IMAGE_COUNT", 2, 1, 3);
+const HYBRID_AI_IMAGE_COUNT = Math.min(readIntEnv("AI_JOB_HYBRID_AI_IMAGE_COUNT", 2, 1, 3), V98_MAX_IMAGE_CALLS_PER_POST);
 const HYBRID_SOURCE_IMAGE_COUNT = readIntEnv("AI_JOB_HYBRID_SOURCE_IMAGE_COUNT", 2, 1, 3);
 
 // Logs.
@@ -211,7 +212,9 @@ async function storeSourceAlbumTail(options: {
       ? enhanced
       : await storeSourceProductImage(supabase, postId, sortOrder, src, {
           generatedFrom: HYBRID_AI_FIRST_ALBUM ? "SHOPEE_SOURCE_HYBRID_TAIL" : "SHOPEE_SOURCE_FAST_ALBUM",
-          captionOverlay: "Shopee product image",
+          captionOverlay: overlays[i] ?? promptForImage?.caption_overlay ?? "",
+          productName,
+          visualAngle: promptForImage?.visual_angle ?? null,
           metadata: { ...metadata, enhanced: false, enhance_error: enhanced.error ?? null },
         });
     if (stored.ok) storedCount += 1;
@@ -551,6 +554,9 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
 
       const stored = await storeSourceProductImage(supabase, postId, 1, images[0], {
         generatedFrom: sourceImageOrigin === "image_search_fallback" ? "IMAGE_SEARCH_FALLBACK" : "SHOPEE_SOURCE",
+        captionOverlay: "Ảnh gốc sản phẩm",
+        productName: productName ?? input.product_name ?? "Sản phẩm",
+        visualAngle: "source",
         metadata: {
           source_image_origin: sourceImageOrigin,
           exact_product_evidence: sourceImageOrigin !== "image_search_fallback",
@@ -648,7 +654,9 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
             ? enhanced
             : await storeSourceProductImage(supabase, postId, i + 1, sourceImages[i], {
                 generatedFrom: "SHOPEE_SOURCE_FAST_ALBUM",
-                captionOverlay: "Shopee product image",
+                captionOverlay: overlays[i - 1] ?? promptForImage?.caption_overlay ?? "",
+                productName: productInput.product_name,
+                visualAngle: promptForImage?.visual_angle ?? null,
                 metadata: { ...metadata, enhanced: false, enhance_error: enhanced.error ?? null },
               });
           if (stored.ok) storedCount += 1;
@@ -725,9 +733,6 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       const useHybrid = out.hybrid_ai_first_album === true;
       const aiTargetCount = useHybrid ? HYBRID_AI_IMAGE_COUNT : AI_IMAGE_COUNT;
       const sortOrder = useHybrid ? idx : idx + 1;
-      if (useHybrid) {
-        await supabase.from("post_creative_assets").delete().eq("generated_post_id", postId).eq("sort_order", sortOrder);
-      }
       if (!p || !p.prompt) return failStep(`Thiếu prompt ảnh #${idx}.`);
       // Gán overlay text -> generateAndStoreImageAsset sẽ render chữ lên ảnh.
       const pWithOverlay = { ...p, caption_overlay: overlays[idx - 1] ?? p.caption_overlay ?? "" };

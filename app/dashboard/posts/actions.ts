@@ -310,7 +310,11 @@ export async function regeneratePostCreativeAssets(postId: string): Promise<Rege
 
     // 2) Reset assets + thêm 1 ảnh nguồn thật.
     await supabase.from("post_creative_assets").delete().eq("generated_post_id", postId);
-    await storeSourceProductImage(supabase, postId, 1, sources[0]);
+    await storeSourceProductImage(supabase, postId, 1, sources[0], {
+      captionOverlay: "Ảnh gốc sản phẩm",
+      productName,
+      visualAngle: "source",
+    });
 
     // 3) Grounding: tóm tắt nhận diện thị giác + sinh 3 ảnh AI bám sản phẩm.
     const vi = await summarizeProductVisualIdentity(sources, productName);

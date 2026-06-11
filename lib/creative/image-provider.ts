@@ -9,6 +9,7 @@ import OpenAI from "openai";
  */
 
 export type ImageProvider = "mock" | "openai" | "v98" | "none";
+const TEXT_FREE_IMAGE_PROMPT_RULE = "no text, no letters, no words, no watermark, no logo, no UI text";
 
 export type GenerateImageInput = {
   product_name: string;
@@ -128,7 +129,8 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
   const client = new OpenAI({ apiKey: cfg.apiKey, ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}) });
   const isGptImage = /gpt-image/i.test(cfg.model);
   const isDalle = /dall-e/i.test(cfg.model);
-  const params: Record<string, unknown> = { model: cfg.model, prompt, n: 1, size: "1024x1024" };
+  const safePrompt = `${prompt} Hard visual constraints: ${TEXT_FREE_IMAGE_PROMPT_RULE}, no captions, no badges, no sticker text, no price text, no product packaging text.`;
+  const params: Record<string, unknown> = { model: cfg.model, prompt: safePrompt, n: 1, size: "1024x1024" };
   // dall-e-* cần response_format để lấy b64; gpt-image-* trả b64 mặc định.
   if (isDalle && !isGptImage) params.response_format = "b64_json";
 
@@ -185,7 +187,7 @@ function buildPrompt(input: GenerateImageInput, styleDesc: string, hasRef: boole
     hasRef
       ? `A real product image is provided separately as reference; you may match its general look, but stay generic.`
       : `No product reference provided — keep it GENERIC. Do NOT imitate any specific product design.`,
-    `Hard constraints: do NOT invent fake product packaging, brand names or logos; do NOT add price text; do NOT create fake screenshots, fake reviews or fake badges; no medical/health claims; no text overlay. The real product photo is shown separately. Clean, trustworthy lifestyle/checklist/benefit visual only.`,
+    `Hard constraints: do NOT invent fake product packaging, brand names or logos; do NOT add price text; do NOT create fake screenshots, fake reviews or fake badges; no medical/health claims; ${TEXT_FREE_IMAGE_PROMPT_RULE}; no text overlay. The real product photo is shown separately. Clean, trustworthy lifestyle/checklist/benefit visual only.`,
   ];
   return parts.filter(Boolean).join(" ");
 }
