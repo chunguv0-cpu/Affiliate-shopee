@@ -127,9 +127,10 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
 
   const client = new OpenAI({ apiKey: cfg.apiKey, ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}) });
   const isGptImage = /gpt-image/i.test(cfg.model);
+  const isDalle = /dall-e/i.test(cfg.model);
   const params: Record<string, unknown> = { model: cfg.model, prompt, n: 1, size: "1024x1024" };
   // dall-e-* cần response_format để lấy b64; gpt-image-* trả b64 mặc định.
-  if (!isGptImage) params.response_format = "b64_json";
+  if (isDalle && !isGptImage) params.response_format = "b64_json";
 
   // V98 hay trả 429 "Something wrong, please try again" -> tự chờ giãn rồi thử lại.
   const isRetryable = (e: unknown): boolean => {

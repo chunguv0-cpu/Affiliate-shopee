@@ -18,7 +18,8 @@ export async function GET(request: Request) {
   }
   const apiKey = process.env.V98_API_KEY?.trim();
   const baseURL = process.env.V98_BASE_URL?.trim();
-  const model = process.env.V98_IMAGE_MODEL?.trim() || "gpt-image-2";
+  const configuredModel = process.env.V98_IMAGE_MODEL?.trim() || "gpt-image-2";
+  const model = new URL(request.url).searchParams.get("model")?.trim() || configuredModel;
   if (!apiKey || !baseURL) {
     return NextResponse.json({ ok: false, error: "Thiếu V98_API_KEY / V98_BASE_URL." }, { status: 500 });
   }
