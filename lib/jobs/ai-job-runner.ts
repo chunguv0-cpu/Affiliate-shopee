@@ -235,9 +235,8 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           browserExtractionTried: true,
           browserExtractionStatus: b.status,
           browserExtractionError: b.error,
-          browserImageCandidatesCount: b.candidatesCount,
-          browserValidImagesCount: b.validCount,
           sourceStrategy: b.ok ? "browser-render-gallery" : undefined,
+          ...b.diagnostics,
         };
         if (b.ok) images = b.image_urls;
       }

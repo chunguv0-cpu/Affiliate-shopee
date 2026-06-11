@@ -46,8 +46,7 @@ export async function GET(request: Request) {
     diagnostics.browserExtractionTried = true;
     diagnostics.browserExtractionStatus = b.status;
     diagnostics.browserExtractionError = b.error;
-    diagnostics.browserImageCandidatesCount = b.candidatesCount;
-    diagnostics.browserValidImagesCount = b.validCount;
+    Object.assign(diagnostics, b.diagnostics);
     if (b.ok && b.image_urls.length > 0) images = b.image_urls;
   }
 
