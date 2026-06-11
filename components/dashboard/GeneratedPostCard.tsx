@@ -72,6 +72,10 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
   // Chỉ ảnh THẬT (không mock) mới hiển thị như ảnh hoàn chỉnh.
   const realThumbs = readyAssets.filter((a) => !isMockUrl(a.image_url));
   const hasMockImage = readyAssets.some((a) => isMockUrl(a.image_url));
+  // HOTFIX 17.3 — phân loại nguồn ảnh.
+  const sourceCount = realThumbs.filter((a) => a.source_type === "PRODUCT").length;
+  const aiGroundedCount = realThumbs.filter((a) => a.source_type === "AI_GENERATED").length;
+  const hasGrounding = sourceCount > 0;
   const packStatus = post.creative_pack_status ?? null;
   const showPack = creativeAssets.length > 0 || (packStatus && packStatus !== "PENDING");
   const canRegenerate = post.status !== "PUBLISHED" && post.status !== "PUBLISHING";
@@ -169,8 +173,11 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
                 {packStatus ? CREATIVE_PACK_STATUS_LABELS[packStatus] : "—"}
               </span>
               <span className="text-xs text-gray-500">
-                {realThumbs.length}/4 ảnh thật{post.creative_pack_mode ? ` · ${post.creative_pack_mode}` : ""}
+                Ảnh nguồn Shopee: {sourceCount} · Ảnh AI bám sản phẩm: {aiGroundedCount}
               </span>
+              {hasGrounding ? (
+                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Có grounding từ link Shopee</span>
+              ) : null}
             </div>
 
             {realThumbs.length > 0 ? (
@@ -195,11 +202,14 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
               {packStatus === "FAILED" ? (
                 <p className="text-xs font-medium text-red-700">Lỗi tạo ảnh: {post.creative_error ?? "Không tạo được ảnh thật."}</p>
               ) : null}
+              {packStatus === "MISSING_PRODUCT_IMAGE" ? (
+                <p className="text-xs font-medium text-red-700">{post.creative_error ?? "Không lấy được ảnh sản phẩm từ link Shopee."}</p>
+              ) : null}
               {hasMockImage ? (
                 <p className="text-xs font-medium text-amber-700">⚠ Có ảnh mock — không tính cho đăng production. Đặt IMAGE_PROVIDER=v98 (hoặc openai) để sinh ảnh thật.</p>
               ) : null}
               {/* Regenerate chỉ là hành động khôi phục khi lỗi/thiếu ảnh. */}
-              {canRegenerate && (packStatus === "FAILED" || packStatus === "PARTIAL") ? (
+              {canRegenerate && (packStatus === "FAILED" || packStatus === "PARTIAL" || packStatus === "MISSING_PRODUCT_IMAGE") ? (
                 <RegenerateCreativeButton postId={post.id} />
               ) : null}
             </div>

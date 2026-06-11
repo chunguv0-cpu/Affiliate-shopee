@@ -6,14 +6,21 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   generateAffiliateCaption,
   generateAffiliatePostBundle,
+  summarizeProductVisualIdentity,
   type GeneratedCaptionResult,
   type ProductInput,
 } from "@/lib/ai/client";
 import {
+  generateAndStoreImageAsset,
   generatePostCreativePack,
   materializeImages,
+  storeSourceProductImage,
 } from "@/lib/creative/generate-post-images";
 import { buildCreativeFields } from "@/lib/posts/creative";
+import { extractShopeeProductData } from "@/lib/shopee/enrich";
+
+const MISSING_SOURCE_MSG =
+  "Không lấy được ảnh sản phẩm từ link Shopee nên chưa thể tạo ảnh AI bám đúng sản phẩm.";
 import { insertPostingLog } from "@/lib/posts/log";
 import { publishGeneratedPostById } from "@/lib/posts/publish";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -262,32 +269,93 @@ export async function regeneratePostCreativeAssets(postId: string): Promise<Rege
     return { ok: false, error: `Không kết nối được cơ sở dữ liệu: ${m}` };
   }
   try {
+    type ProdEmbed = {
+      product_name?: string;
+      target_customer?: string | null;
+      product_angle?: string | null;
+      affiliate_link?: string | null;
+      source_product_images?: unknown;
+    };
     const { data, error } = await supabase
       .from("generated_posts")
-      .select("id, caption, hook, products(product_name, target_customer, product_angle, affiliate_link)")
+      .select(
+        "id, products(product_name, target_customer, product_angle, affiliate_link, source_product_images)",
+      )
       .eq("id", postId)
       .single();
     if (error || !data) return { ok: false, error: "Không tìm thấy bài đăng." };
-    const row = data as {
-      caption: string | null;
-      hook: string | null;
-      products:
-        | { product_name?: string; target_customer?: string | null; product_angle?: string | null; affiliate_link?: string | null }
-        | Array<{ product_name?: string; target_customer?: string | null; product_angle?: string | null; affiliate_link?: string | null }>
-        | null;
-    };
+    const row = data as { products: ProdEmbed | ProdEmbed[] | null };
     const product = Array.isArray(row.products) ? row.products[0] : row.products;
-    const r = await generatePostCreativePack(supabase, postId, {
-      product_name: product?.product_name ?? "Sản phẩm",
-      target_customer: product?.target_customer ?? null,
-      product_angle: product?.product_angle ?? null,
-      hook: row.hook,
-      caption_summary: row.caption,
-      affiliate_link: product?.affiliate_link ?? null,
+    const productName = product?.product_name ?? "Sản phẩm";
+
+    // 1) Ảnh nguồn THẬT — ưu tiên đã lưu, nếu trống thì thử lấy lại từ link Shopee.
+    let sources = Array.isArray(product?.source_product_images)
+      ? (product!.source_product_images as unknown[]).filter((u): u is string => typeof u === "string" && /^https?:\/\//i.test(u))
+      : [];
+    if (sources.length === 0 && product?.affiliate_link) {
+      const ex = await extractShopeeProductData(product.affiliate_link);
+      if (ex.ok) sources = ex.image_urls;
+    }
+    if (sources.length === 0) {
+      await supabase
+        .from("generated_posts")
+        .update({ creative_pack_status: "MISSING_PRODUCT_IMAGE", creative_error: MISSING_SOURCE_MSG, publish_mode: "FEED", updated_at: new Date().toISOString() })
+        .eq("id", postId);
+      revalidatePath("/dashboard/posts");
+      return { ok: false, error: MISSING_SOURCE_MSG };
+    }
+
+    // 2) Reset assets + thêm 1 ảnh nguồn thật.
+    await supabase.from("post_creative_assets").delete().eq("generated_post_id", postId);
+    await storeSourceProductImage(supabase, postId, 1, sources[0]);
+
+    // 3) Grounding: tóm tắt nhận diện thị giác + sinh 3 ảnh AI bám sản phẩm.
+    const vi = await summarizeProductVisualIdentity(sources, productName);
+    const bundle = await generateAffiliatePostBundle(
+      {
+        product_name: productName,
+        affiliate_link: product?.affiliate_link ?? "",
+        target_customer: product?.target_customer ?? null,
+        product_angle: product?.product_angle ?? null,
+      },
+      { visualIdentity: vi },
+    );
+    const prompts = bundle.image_prompts.slice(0, 3);
+    for (let i = 0; i < prompts.length; i += 1) {
+      await generateAndStoreImageAsset(supabase, postId, i + 2, prompts[i]);
+    }
+
+    // 4) Tính trạng thái.
+    const { data: assetRows } = await supabase
+      .from("post_creative_assets")
+      .select("status, image_url, source_type, metadata")
+      .eq("generated_post_id", postId)
+      .eq("status", "READY");
+    const list = (assetRows ?? []) as Array<{ image_url: string | null; source_type: string | null; metadata: unknown }>;
+    const real = list.filter((a) => {
+      const m = a.metadata && typeof a.metadata === "object" ? (a.metadata as Record<string, unknown>) : {};
+      return !!a.image_url && m.mock !== true;
     });
+    const productCount = real.filter((a) => a.source_type === "PRODUCT").length;
+    const total = real.length;
+    const packStatus = total >= 4 && productCount >= 1 ? "READY" : productCount === 0 ? "MISSING_PRODUCT_IMAGE" : total >= 1 ? "PARTIAL" : "FAILED";
+    await supabase
+      .from("generated_posts")
+      .update({
+        creative_pack_status: packStatus,
+        creative_pack_mode: "MIXED",
+        publish_mode: packStatus === "READY" ? "PHOTO_ALBUM" : "FEED",
+        creative_summary: `${total} ảnh (nguồn Shopee: ${productCount}, AI bám SP: ${total - productCount}).`,
+        creative_error: packStatus === "READY" ? null : `Chưa đủ ảnh bám sản phẩm: ${total}/4 (nguồn ${productCount}).`,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", postId);
+
     revalidatePath("/dashboard/posts");
     revalidatePath("/dashboard/calendar");
-    return { ok: true, status: r.status, total: r.total };
+    return packStatus === "READY"
+      ? { ok: true, status: packStatus, total }
+      : { ok: false, error: `Chưa đủ ảnh bám sản phẩm: ${total}/4 (nguồn ${productCount}).` };
   } catch (err) {
     const m = err instanceof Error ? err.message : "Lỗi không xác định.";
     return { ok: false, error: `Dựng lại ảnh thất bại: ${m}` };

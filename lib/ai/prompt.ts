@@ -104,6 +104,7 @@ Trong MỘT lần trả lời, hãy tạo: caption + hook + 4 prompt sinh ảnh 
 Caption: tự nhiên như người thật chia sẻ, hook mạnh 1-2 dòng đầu, có CTA nhẹ, có dòng "Bài có gắn link tiếp thị liên kết.", tối đa 900 ký tự, ≤5 hashtag. KHÔNG bịa giá, KHÔNG claim tuyệt đối; nếu giá chưa chắc thêm "giá có thể thay đổi theo thời điểm".
 
 4 prompt ảnh theo chiến lược: (1) hero product scene, (2) lifestyle/đang dùng, (3) detail/giải quyết vấn đề, (4) benefit/kích mua. Prompt viết bằng tiếng Anh cho mô hình ảnh, BÁM SÁT sản phẩm & nhóm hàng.
+QUAN TRỌNG: nếu có "NHẬN DIỆN THỊ GIÁC SẢN PHẨM" bên dưới (trích từ ảnh thật Shopee), MỌI prompt phải GIỮ ĐÚNG kiểu dáng/màu sắc/hình khối/chi tiết đó; KHÔNG đổi màu, KHÔNG đổi thiết kế.
 RULE ảnh: KHÔNG bịa logo/nhãn hiệu/giá; KHÔNG screenshot giả; KHÔNG ảnh stock vô nghĩa; KHÔNG card trắng/placeholder; KHÔNG claim y tế. Ảnh là minh hoạ AI cho nội dung affiliate.
 
 Chấm điểm: 90-100 rất tốt; 80-89 đăng được; <80 nên sửa (should_publish=false).

@@ -2,15 +2,22 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { generateAffiliatePostBundle, type ProductInput } from "@/lib/ai/client";
-import { generateAndStoreImageAsset } from "@/lib/creative/generate-post-images";
+import {
+  generateAffiliatePostBundle,
+  summarizeProductVisualIdentity,
+  type ProductInput,
+} from "@/lib/ai/client";
+import { generateAndStoreImageAsset, storeSourceProductImage } from "@/lib/creative/generate-post-images";
 import { insertPostingLog } from "@/lib/posts/log";
+import { extractShopeeProductData } from "@/lib/shopee/enrich";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { AiJob, AiJobStatus, GeneratedPostStatus } from "@/lib/types";
 
 const JOB_TYPE = "CREATE_AI_POST_WITH_IMAGES";
-const PROGRESS_TOTAL = 6;
+const PROGRESS_TOTAL = 7;
 const STALE_MS = 5 * 60 * 1000;
+// 1 ảnh thật Shopee + 3 ảnh AI bám sản phẩm = 4.
+const AI_IMAGE_COUNT = 3;
 
 // Logs.
 const STEP_STARTED = "AI_JOB_STEP_STARTED";
@@ -18,17 +25,29 @@ const STEP_SUCCESS = "AI_JOB_STEP_SUCCESS";
 const STEP_FAILED = "AI_JOB_STEP_FAILED";
 const JOB_SUCCESS = "AI_JOB_SUCCESS";
 const JOB_FAILED = "AI_JOB_FAILED";
+const SHOPEE_FETCH_STARTED = "SHOPEE_PRODUCT_FETCH_STARTED";
+const SHOPEE_FETCH_SUCCESS = "SHOPEE_PRODUCT_FETCH_SUCCESS";
+const SHOPEE_FETCH_FAILED = "SHOPEE_PRODUCT_FETCH_FAILED";
+const GROUNDING_READY = "PRODUCT_IMAGE_GROUNDING_READY";
+const GROUNDING_MISSING = "PRODUCT_IMAGE_GROUNDING_MISSING";
+const GROUNDED_GEN_STARTED = "GROUNDED_IMAGE_GENERATION_STARTED";
+const GROUNDED_GEN_SUCCESS = "GROUNDED_IMAGE_GENERATION_SUCCESS";
+const GROUNDED_GEN_FAILED = "GROUNDED_IMAGE_GENERATION_FAILED";
 
 // Tiến độ theo bước (INIT là setup, không tính).
 const STEP_PROGRESS: Record<string, number> = {
   INIT: 0,
-  TEXT: 1,
-  IMAGE_1: 2,
-  IMAGE_2: 3,
-  IMAGE_3: 4,
-  IMAGE_4: 5,
-  FINALIZE: 6,
+  SOURCE: 1,
+  VISION: 2,
+  TEXT: 3,
+  IMAGE_1: 4,
+  IMAGE_2: 5,
+  IMAGE_3: 6,
+  FINALIZE: 7,
 };
+
+const MISSING_SOURCE_MSG =
+  "Không lấy được ảnh sản phẩm từ link Shopee nên chưa thể tạo ảnh AI bám đúng sản phẩm.";
 
 export type RunStepResult = {
   ok: boolean;
@@ -44,7 +63,7 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** Chạy ĐÚNG MỘT bước của job. KHÔNG throw. Idempotent nhẹ qua locked_at. */
+/** Chạy ĐÚNG MỘT bước của job. KHÔNG throw. */
 export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
   let supabase: SupabaseClient;
   try {
@@ -61,34 +80,27 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
   const job = data as AiJob;
   const progress = { current: job.progress_current, total: job.progress_total || PROGRESS_TOTAL };
 
-  // Đã kết thúc.
   if (job.status === "SUCCESS" || job.status === "FAILED") {
     return { ok: true, jobId, step: job.step, status: job.status, progress, message: "Job đã kết thúc." };
   }
-
-  // Đang chạy bởi runner khác (locked gần đây) -> bỏ qua.
   if (job.status === "RUNNING" && job.locked_at) {
     const lockedMs = Date.now() - new Date(job.locked_at).getTime();
     if (Number.isFinite(lockedMs) && lockedMs < STALE_MS) {
       return { ok: true, jobId, step: job.step, status: job.status, progress, message: "Bước đang chạy, bỏ qua." };
     }
-    // stale -> tiếp tục (recover).
   }
 
   const step = job.step || "INIT";
 
-  // Claim: chuyển RUNNING + khóa.
   await supabase
     .from("ai_jobs")
     .update({ status: "RUNNING", locked_at: nowIso(), started_at: job.started_at ?? nowIso(), updated_at: nowIso() })
     .eq("id", jobId);
-
   await insertPostingLog(supabase, job.related_post_id ?? null, STEP_STARTED, "SUCCESS", `Job ${JOB_TYPE} bước ${step}.`, {
     ai_job_id: jobId,
     step,
   });
 
-  // Helper: tiến sang bước kế.
   const advance = async (nextStep: string, patch?: Record<string, unknown>): Promise<RunStepResult> => {
     await supabase
       .from("ai_jobs")
@@ -114,7 +126,6 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
     };
   };
 
-  // Helper: lỗi 1 bước -> retry hoặc fail hẳn.
   const failStep = async (message: string): Promise<RunStepResult> => {
     const attempts = (job.attempts ?? 0) + 1;
     const willRetry = attempts < (job.max_attempts ?? 3);
@@ -129,20 +140,22 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         .eq("id", jobId);
       return { ok: false, jobId, step, status: "WAITING_RETRY", progress, error: message };
     }
-    // Hết lượt -> FAILED + cập nhật post.
+    return failHard(message, job.related_post_id);
+  };
+
+  // Dừng hẳn (không retry) — dùng cho MISSING_SOURCE / hết lượt.
+  const failHard = async (message: string, postId: string | null, packStatus = "FAILED"): Promise<RunStepResult> => {
     await supabase
       .from("ai_jobs")
-      .update({ status: "FAILED", attempts, error_message: message.slice(0, 1000), finished_at: nowIso(), locked_at: null, updated_at: nowIso() })
+      .update({ status: "FAILED", error_message: message.slice(0, 1000), finished_at: nowIso(), locked_at: null, updated_at: nowIso() })
       .eq("id", jobId);
-    if (job.related_post_id) {
+    if (postId) {
       await supabase
         .from("generated_posts")
-        .update({ creative_pack_status: "FAILED", creative_error: message.slice(0, 500), updated_at: nowIso() })
-        .eq("id", job.related_post_id);
+        .update({ creative_pack_status: packStatus, creative_error: message.slice(0, 500), publish_mode: "FEED", updated_at: nowIso() })
+        .eq("id", postId);
     }
-    await insertPostingLog(supabase, job.related_post_id ?? null, JOB_FAILED, "FAILED", `Job thất bại: ${message}`.slice(0, 1000), {
-      ai_job_id: jobId,
-    });
+    await insertPostingLog(supabase, postId ?? null, JOB_FAILED, "FAILED", `Job thất bại: ${message}`.slice(0, 1000), { ai_job_id: jobId });
     return { ok: false, jobId, step, status: "FAILED", progress, error: message };
   };
 
@@ -165,21 +178,59 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           should_publish: false,
           ai_score: 0,
           creative_pack_status: "PENDING",
-          creative_pack_mode: "GENERATED_ONLY",
+          creative_pack_mode: "MIXED",
           creative_min_assets: 4,
           publish_mode: "FEED",
         })
         .select("id")
         .single();
       if (insErr || !post) return failStep(`Tạo bài nháp thất bại: ${insErr?.message ?? "không rõ"}`);
-      return advance("TEXT", { related_post_id: post.id });
+      return advance("SOURCE", { related_post_id: post.id });
     }
 
     const postId = job.related_post_id;
     if (!postId) return failStep("Thiếu related_post_id (chưa qua INIT).");
 
-    // ---------- TEXT ----------
+    // ---------- SOURCE: lấy ảnh thật từ link Shopee ----------
+    if (step === "SOURCE") {
+      await insertPostingLog(supabase, postId, SHOPEE_FETCH_STARTED, "SUCCESS", "Bắt đầu lấy ảnh sản phẩm từ Shopee.", { ai_job_id: jobId });
+      const link = (input.affiliate_link ?? "").trim();
+      const data2 = await extractShopeeProductData(link);
+      if (!data2.ok || data2.image_urls.length === 0) {
+        await insertPostingLog(supabase, postId, SHOPEE_FETCH_FAILED, "FAILED", data2.error ?? "Không có ảnh.", { ai_job_id: jobId });
+        await insertPostingLog(supabase, postId, GROUNDING_MISSING, "FAILED", MISSING_SOURCE_MSG, { ai_job_id: jobId });
+        // Không retry vô ích nhiều lần với link bị chặn -> fail hẳn với trạng thái thiếu ảnh nguồn.
+        return failHard(MISSING_SOURCE_MSG, postId, "MISSING_PRODUCT_IMAGE");
+      }
+      // Lưu ảnh nguồn vào product.
+      if (job.related_product_id) {
+        await supabase
+          .from("products")
+          .update({ source_product_images: data2.image_urls, updated_at: nowIso() })
+          .eq("id", job.related_product_id);
+      }
+      // Thêm 1 ảnh thật làm asset PRODUCT (sort 1).
+      const stored = await storeSourceProductImage(supabase, postId, 1, data2.image_urls[0]);
+      if (!stored.ok) return failStep(stored.error ?? "Lưu ảnh nguồn thất bại.");
+      await insertPostingLog(supabase, postId, SHOPEE_FETCH_SUCCESS, "SUCCESS", `Lấy ${data2.image_urls.length} ảnh sản phẩm Shopee.`, { ai_job_id: jobId });
+      await insertPostingLog(supabase, postId, GROUNDING_READY, "SUCCESS", "Đã có ảnh nguồn để grounding.", { ai_job_id: jobId });
+      return advance("VISION", {
+        attempts: 0,
+        output: { ...((job.output as object) ?? {}), source_images: data2.image_urls, product_url: data2.product_url, description: data2.description },
+      });
+    }
+
+    // ---------- VISION: tóm tắt nhận diện thị giác ----------
+    if (step === "VISION") {
+      const out = (job.output ?? {}) as { source_images?: string[] };
+      const images = Array.isArray(out.source_images) ? out.source_images : [];
+      const vi = await summarizeProductVisualIdentity(images, input.product_name ?? "Sản phẩm");
+      return advance("TEXT", { output: { ...out, visual_identity: vi } });
+    }
+
+    // ---------- TEXT: caption + hook + prompt (grounded) ----------
     if (step === "TEXT") {
+      const out = (job.output ?? {}) as { visual_identity?: string };
       const productInput: ProductInput = {
         product_name: input.product_name ?? "Sản phẩm",
         affiliate_link: input.affiliate_link ?? "",
@@ -187,9 +238,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         product_angle: input.product_angle ?? null,
         price_note: input.price_note ?? null,
       };
-      const bundle = await generateAffiliatePostBundle(productInput);
-      const postStatus: GeneratedPostStatus =
-        bundle.score >= 80 && bundle.should_publish === true ? "READY" : "REJECTED";
+      const bundle = await generateAffiliatePostBundle(productInput, { visualIdentity: out.visual_identity });
       await supabase
         .from("generated_posts")
         .update({
@@ -198,32 +247,35 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           ai_score: bundle.score,
           safety_notes: bundle.safety_notes,
           should_publish: bundle.should_publish,
-          // status tạm để REJECTED/READY về sau ở FINALIZE; giữ DRAFT tới khi đủ ảnh.
           updated_at: nowIso(),
         })
         .eq("id", postId);
+      await insertPostingLog(supabase, postId, GROUNDED_GEN_STARTED, "SUCCESS", "Sinh ảnh AI bám sản phẩm.", { ai_job_id: jobId });
       return advance("IMAGE_1", {
         output: {
-          image_prompts: bundle.image_prompts,
-          target_status: postStatus,
+          ...out,
+          image_prompts: bundle.image_prompts.slice(0, AI_IMAGE_COUNT),
           ai_score: bundle.score,
           should_publish: bundle.should_publish,
         },
       });
     }
 
-    // ---------- IMAGE_1..4 ----------
-    const imageStep = step.match(/^IMAGE_([1-4])$/);
+    // ---------- IMAGE_1..3: ảnh AI grounded (sort 2..4) ----------
+    const imageStep = step.match(/^IMAGE_([1-3])$/);
     if (imageStep) {
-      const idx = parseInt(imageStep[1], 10); // 1..4
+      const idx = parseInt(imageStep[1], 10); // 1..3
       const out = (job.output ?? {}) as { image_prompts?: Array<{ prompt: string; caption_overlay?: string; visual_angle?: string }> };
       const prompts = Array.isArray(out.image_prompts) ? out.image_prompts : [];
       const p = prompts[idx - 1];
       if (!p || !p.prompt) return failStep(`Thiếu prompt ảnh #${idx}.`);
-      const res = await generateAndStoreImageAsset(supabase, postId, idx, p);
-      if (!res.ok) return failStep(res.error ?? `Sinh ảnh #${idx} thất bại.`);
-      const next = idx < 4 ? `IMAGE_${idx + 1}` : "FINALIZE";
-      // reset attempts khi 1 ảnh thành công.
+      const res = await generateAndStoreImageAsset(supabase, postId, idx + 1, p); // sort 2,3,4
+      if (!res.ok) {
+        await insertPostingLog(supabase, postId, GROUNDED_GEN_FAILED, "FAILED", res.error ?? `Ảnh #${idx} lỗi.`, { ai_job_id: jobId });
+        return failStep(res.error ?? `Sinh ảnh #${idx} thất bại.`);
+      }
+      await insertPostingLog(supabase, postId, GROUNDED_GEN_SUCCESS, "SUCCESS", `Ảnh AI #${idx} xong.`, { ai_job_id: jobId });
+      const next = idx < AI_IMAGE_COUNT ? `IMAGE_${idx + 1}` : "FINALIZE";
       return advance(next, { attempts: 0 });
     }
 
@@ -231,28 +283,31 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
     if (step === "FINALIZE") {
       const { data: assets } = await supabase
         .from("post_creative_assets")
-        .select("status, image_url, metadata")
+        .select("status, image_url, source_type, metadata")
         .eq("generated_post_id", postId)
         .eq("status", "READY");
-      const realReady = ((assets ?? []) as Array<{ image_url: string | null; metadata: unknown }>).filter((a) => {
+      const list = (assets ?? []) as Array<{ image_url: string | null; source_type: string | null; metadata: unknown }>;
+      const realReady = list.filter((a) => {
         const m = a.metadata && typeof a.metadata === "object" ? (a.metadata as Record<string, unknown>) : {};
         return !!a.image_url && m.mock !== true;
-      }).length;
+      });
+      const productCount = realReady.filter((a) => a.source_type === "PRODUCT").length;
+      const total = realReady.length;
 
       const out = (job.output ?? {}) as { ai_score?: number; should_publish?: boolean };
       const aiScore = typeof out.ai_score === "number" ? out.ai_score : 0;
       const shouldPublish = out.should_publish === true;
 
-      if (realReady >= 4) {
+      if (total >= 4 && productCount >= 1) {
         const postStatus: GeneratedPostStatus = aiScore >= 80 && shouldPublish ? "READY" : "REJECTED";
         await supabase
           .from("generated_posts")
           .update({
             creative_pack_status: "READY",
-            creative_pack_mode: "GENERATED_ONLY",
+            creative_pack_mode: "MIXED",
             publish_mode: "PHOTO_ALBUM",
             status: postStatus,
-            creative_summary: `${realReady}/4 ảnh thật.`,
+            creative_summary: `${total} ảnh (nguồn Shopee: ${productCount}, AI bám SP: ${total - productCount}).`,
             creative_error: null,
             updated_at: nowIso(),
           })
@@ -261,31 +316,17 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           .from("ai_jobs")
           .update({ status: "SUCCESS", step: "FINALIZE", progress_current: PROGRESS_TOTAL, finished_at: nowIso(), locked_at: null, error_message: null, updated_at: nowIso() })
           .eq("id", jobId);
-        await insertPostingLog(supabase, postId, JOB_SUCCESS, "SUCCESS", `Job xong: ${realReady}/4 ảnh, post ${postStatus}.`, {
-          ai_job_id: jobId,
-        });
+        await insertPostingLog(supabase, postId, JOB_SUCCESS, "SUCCESS", `Job xong: ${total} ảnh (nguồn ${productCount}), post ${postStatus}.`, { ai_job_id: jobId });
         return { ok: true, jobId, step: "FINALIZE", status: "SUCCESS", progress: { current: PROGRESS_TOTAL, total: PROGRESS_TOTAL } };
       }
 
-      const msg = `Only ${realReady}/4 images generated.`;
-      await supabase
-        .from("generated_posts")
-        .update({
-          creative_pack_status: realReady >= 1 ? "PARTIAL" : "FAILED",
-          publish_mode: "FEED",
-          creative_error: msg,
-          updated_at: nowIso(),
-        })
-        .eq("id", postId);
-      await supabase
-        .from("ai_jobs")
-        .update({ status: "FAILED", finished_at: nowIso(), locked_at: null, error_message: msg, updated_at: nowIso() })
-        .eq("id", jobId);
-      await insertPostingLog(supabase, postId, JOB_FAILED, "FAILED", `Job thất bại: ${msg}`, { ai_job_id: jobId });
-      return { ok: false, jobId, step: "FINALIZE", status: "FAILED", progress: { current: PROGRESS_TOTAL, total: PROGRESS_TOTAL }, error: msg };
+      const msg =
+        productCount === 0
+          ? MISSING_SOURCE_MSG
+          : `Chưa đủ ảnh: ${total}/4 (nguồn Shopee: ${productCount}).`;
+      return failHard(msg, postId, productCount === 0 ? "MISSING_PRODUCT_IMAGE" : total >= 1 ? "PARTIAL" : "FAILED");
     }
 
-    // Bước không hợp lệ -> coi như INIT lại.
     return advance("INIT");
   } catch (err) {
     const m = err instanceof Error ? err.message : "Lỗi không xác định.";
@@ -293,9 +334,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
   }
 }
 
-/**
- * Tìm 1 job để chạy: PENDING/WAITING_RETRY trước, rồi RUNNING quá hạn (stale).
- */
+/** Tìm 1 job để chạy: PENDING/WAITING_RETRY trước, rồi RUNNING quá hạn (stale). */
 export async function pickAndRunNextJob(): Promise<RunStepResult | { ok: true; message: string }> {
   const supabase = createSupabaseAdminClient();
   const { data: ready } = await supabase

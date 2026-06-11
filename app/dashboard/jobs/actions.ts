@@ -40,7 +40,7 @@ export async function createAiPostImageJob(productId: string): Promise<CreateJob
         status: "PENDING",
         step: "INIT",
         progress_current: 0,
-        progress_total: 6,
+        progress_total: 7,
         related_product_id: p.id,
         input: {
           product_name: p.product_name,

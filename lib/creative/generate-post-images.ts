@@ -471,6 +471,38 @@ export async function generateAndStoreImageAsset(
 }
 
 /**
+ * HOTFIX 17.3 — Lưu MỘT ảnh THẬT của sản phẩm Shopee thành asset PRODUCT (re-host về Storage).
+ * Fallback dùng URL gốc nếu re-host lỗi. KHÔNG throw.
+ */
+export async function storeSourceProductImage(
+  supabase: SupabaseClient,
+  postId: string,
+  sortOrder: number,
+  imageUrl: string,
+): Promise<{ ok: boolean; image_url: string | null; error: string | null }> {
+  const src = (imageUrl ?? "").trim();
+  if (!/^https?:\/\//i.test(src)) return { ok: false, image_url: null, error: "Source image URL không hợp lệ." };
+  const up = await uploadImageFromUrl(supabase, postId, sortOrder, src);
+  const finalUrl = up.url ?? src; // re-host được thì dùng Storage; không thì dùng URL gốc.
+  try {
+    await supabase.from("post_creative_assets").insert({
+      generated_post_id: postId,
+      asset_type: "IMAGE",
+      source_type: "PRODUCT",
+      image_url: finalUrl,
+      prompt: null,
+      caption_overlay: "Ảnh sản phẩm Shopee",
+      sort_order: sortOrder,
+      status: "READY",
+      metadata: { generated_from: "SHOPEE_SOURCE", mock: false, rehosted: !!up.url, origin: src },
+    });
+  } catch (err) {
+    return { ok: false, image_url: null, error: err instanceof Error ? err.message.slice(0, 200) : "Insert source asset failed." };
+  }
+  return { ok: true, image_url: finalUrl, error: null };
+}
+
+/**
  * Dựng pack từ context (tự sinh prompt pack rồi sinh ảnh). Dùng cho REGENERATE.
  * One-step flow truyền thẳng prompts từ 1 call text -> dùng materializeImages.
  */

@@ -320,26 +320,76 @@ function parseBundle(raw: string, product: ProductInput): AiPostBundle {
 
 /**
  * Một call text AI: caption + hook + 4 image prompts. KHÔNG throw (fallback mock).
+ * opts.visualIdentity: nhận diện thị giác trích từ ảnh thật Shopee -> ground prompts.
  */
-export async function generateAffiliatePostBundle(product: ProductInput): Promise<AiPostBundle> {
+export async function generateAffiliatePostBundle(
+  product: ProductInput,
+  opts?: { visualIdentity?: string | null },
+): Promise<AiPostBundle> {
   const provider = getAIProvider();
   if (provider === "mock") return mockBundle(product);
   try {
     const { apiKey, baseURL, model } = resolveProviderConfig(provider);
     const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+    const vi = (opts?.visualIdentity ?? "").trim();
+    const userContent = vi
+      ? `${buildBundleUserPrompt(product)}\n\nNHẬN DIỆN THỊ GIÁC SẢN PHẨM (bám sát tuyệt đối, từ ảnh thật Shopee):\n${vi}`
+      : buildBundleUserPrompt(product);
     const completion = await client.chat.completions.create({
       model,
       temperature: 0.7,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: BUNDLE_SYSTEM_PROMPT },
-        { role: "user", content: buildBundleUserPrompt(product) },
+        { role: "user", content: userContent },
       ],
     });
     const raw = completion.choices[0]?.message?.content ?? "";
     return parseBundle(raw, product);
   } catch {
     return mockBundle(product);
+  }
+}
+
+/**
+ * Tóm tắt NHẬN DIỆN THỊ GIÁC sản phẩm từ ảnh thật (vision). KHÔNG throw.
+ * Fallback: suy luận nhẹ từ tên sản phẩm nếu model không hỗ trợ ảnh.
+ */
+export async function summarizeProductVisualIdentity(
+  imageUrls: string[],
+  productName: string,
+): Promise<string> {
+  const urls = (imageUrls ?? []).filter((u) => typeof u === "string" && /^https?:\/\//i.test(u)).slice(0, 3);
+  const fallback = `${productName} — giữ đúng loại sản phẩm, màu sắc, hình khối và chi tiết thiết kế như ảnh thật.`;
+  const provider = getAIProvider();
+  if (provider === "mock" || urls.length === 0) return fallback;
+  try {
+    const { apiKey, baseURL, model } = resolveProviderConfig(provider);
+    const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+    const content: Array<Record<string, unknown>> = [
+      {
+        type: "text",
+        text:
+          `Mô tả NHẬN DIỆN THỊ GIÁC của sản phẩm "${productName}" từ các ảnh sau, NGẮN GỌN (<=80 từ), tiếng Việt: ` +
+          "loại sản phẩm, màu sắc chính, hình khối/kiểu dáng, chi tiết thiết kế nổi bật, phụ kiện/ngữ cảnh nếu thấy. " +
+          "KHÔNG bịa thương hiệu/giá. Chỉ trả mô tả thuần.",
+      },
+      ...urls.map((url) => ({ type: "image_url", image_url: { url } })),
+    ];
+    const completion = await client.chat.completions.create({
+      model,
+      temperature: 0.3,
+      messages: [
+        { role: "system", content: "Bạn mô tả nhận diện thị giác sản phẩm ngắn gọn, chính xác, không bịa." },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { role: "user", content: content as any },
+      ],
+    });
+    const text = completion.choices[0]?.message?.content;
+    const out = typeof text === "string" ? text.trim() : "";
+    return out || fallback;
+  } catch {
+    return fallback;
   }
 }
 

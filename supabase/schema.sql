@@ -33,6 +33,8 @@ create table if not exists products (
   product_angle   text,
   image_url       text,
   status          text not null default 'NEW',
+  -- Hotfix 17.3: ảnh thật của sản phẩm Shopee (để grounding ảnh AI).
+  source_product_images jsonb default '[]'::jsonb,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
   constraint products_status_check

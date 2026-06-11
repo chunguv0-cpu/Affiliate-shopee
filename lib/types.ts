@@ -16,6 +16,7 @@ export type Product = {
   product_angle: string | null;
   image_url: string | null;
   status: ProductStatus;
+  source_product_images?: unknown;
   created_at: string;
   updated_at: string;
 };

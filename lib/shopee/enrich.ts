@@ -51,6 +51,129 @@ function titleTag(html: string): string | null {
   return m ? decodeEntities(m[1]) : null;
 }
 
+/** Lấy TẤT CẢ content của các thẻ meta theo property/name (vd nhiều og:image). */
+function metaContentAll(html: string, prop: string): string[] {
+  const p = prop.replace(/[:]/g, "\\:");
+  const out: string[] = [];
+  const re = new RegExp(
+    `<meta[^>]+(?:property|name)=["']${p}["'][^>]*content=["']([^"']+)["']`,
+    "gi",
+  );
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const v = decodeEntities(m[1]);
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+/** Quét URL ảnh CDN Shopee xuất hiện trong HTML (best-effort, không scrape sâu). */
+function shopeeCdnImages(html: string): string[] {
+  const out: string[] = [];
+  // down-vn.img.susercontent.com / cf.shopee.vn / cdn ... đuôi ảnh hoặc id ảnh.
+  const re = /https?:\/\/[^"'\s)]+(?:susercontent\.com|shopee[^"'\s)]*)\/[^"'\s)]+/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const u = m[0];
+    if (/\.(?:jpg|jpeg|png|webp)(?:$|[?#])/i.test(u) || /susercontent\.com\/[a-z0-9]+$/i.test(u)) {
+      out.push(u);
+    }
+    if (out.length > 30) break;
+  }
+  return out;
+}
+
+function dedupe(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of urls) {
+    const t = (u ?? "").trim();
+    if (!t || !/^https?:\/\//i.test(t)) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
+export type ShopeeProductData = {
+  product_url: string | null;
+  product_name: string | null;
+  image_urls: string[];
+  description: string | null;
+  category: string | null;
+  ok: boolean;
+  error?: string | null;
+};
+
+/**
+ * HOTFIX 17.3 — Resolve link affiliate Shopee + trích dữ liệu sản phẩm THẬT.
+ * Trả nhiều ảnh nếu lấy được (og:image* + quét CDN). KHÔNG scrape browser, KHÔNG cookie.
+ * Shopee có thể chặn/JS-render -> có thể chỉ lấy được og:image (1 ảnh). KHÔNG throw.
+ */
+export async function extractShopeeProductData(affiliateLink: string): Promise<ShopeeProductData> {
+  const base: ShopeeProductData = {
+    product_url: null,
+    product_name: null,
+    image_urls: [],
+    description: null,
+    category: null,
+    ok: false,
+    error: null,
+  };
+  if (!getAllowedShopeeHost(affiliateLink)) {
+    return { ...base, error: "Link không thuộc domain Shopee hợp lệ." };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 9000);
+  try {
+    const res = await fetch(affiliateLink, {
+      method: "GET",
+      redirect: "follow",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml",
+      },
+    });
+    const resolvedUrl = res.url || affiliateLink; // đã follow short link -> URL sản phẩm
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!res.ok || !contentType.includes("text/html")) {
+      return { ...base, product_url: resolvedUrl, error: `Không đọc được trang sản phẩm (HTTP ${res.status}).` };
+    }
+    const raw = await res.text();
+    const html = raw.slice(0, 500_000);
+
+    const name = metaContent(html, "og:title") ?? titleTag(html);
+    const description = metaContent(html, "og:description");
+    const ogImages = [
+      ...metaContentAll(html, "og:image"),
+      ...metaContentAll(html, "og:image:url"),
+      ...metaContentAll(html, "og:image:secure_url"),
+      ...metaContentAll(html, "twitter:image"),
+      ...metaContentAll(html, "twitter:image:src"),
+    ];
+    const images = dedupe([...ogImages, ...shopeeCdnImages(html)]).slice(0, 8);
+
+    return {
+      product_url: resolvedUrl,
+      product_name: name,
+      image_urls: images,
+      description: description ?? null,
+      category: null,
+      ok: images.length > 0,
+      error: images.length > 0 ? null : "Không tìm thấy ảnh sản phẩm trong trang.",
+    };
+  } catch (err) {
+    return { ...base, error: err instanceof Error ? err.message.slice(0, 200) : "Lỗi tải trang sản phẩm." };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function enrichShopeeAffiliateLink(
   affiliateLink: string,
 ): Promise<EnrichedShopeeLink> {
