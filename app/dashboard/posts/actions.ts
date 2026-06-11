@@ -5,10 +5,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
   generateAffiliateCaption,
+  generateAffiliatePostBundle,
   type GeneratedCaptionResult,
   type ProductInput,
 } from "@/lib/ai/client";
-import { generatePostCreativePack } from "@/lib/creative/generate-post-images";
+import {
+  generatePostCreativePack,
+  materializeImages,
+} from "@/lib/creative/generate-post-images";
 import { buildCreativeFields } from "@/lib/posts/creative";
 import { insertPostingLog } from "@/lib/posts/log";
 import { publishGeneratedPostById } from "@/lib/posts/publish";
@@ -54,6 +58,13 @@ export type PublishResult =
 export type RetryResult = { ok: true } | { ok: false; error: string };
 
 const GENERATE_ACTION = "GENERATE_CAPTION";
+// Phase 17.2 — one-step AI post.
+const ONE_STEP_STARTED = "ONE_STEP_AI_POST_STARTED";
+const ONE_STEP_TEXT_DONE = "ONE_STEP_AI_TEXT_DONE";
+const ONE_STEP_IMAGES_STARTED = "ONE_STEP_AI_IMAGES_STARTED";
+const ONE_STEP_IMAGES_DONE = "ONE_STEP_AI_IMAGES_DONE";
+const ONE_STEP_READY = "ONE_STEP_AI_POST_READY";
+const ONE_STEP_FAILED = "ONE_STEP_AI_POST_FAILED";
 const SCHEDULE_ACTION = "SCHEDULE_POST";
 const CLEAR_SCHEDULE_ACTION = "CLEAR_SCHEDULE";
 const RETRY_ACTION = "RETRY_FAILED_POST";
@@ -264,6 +275,116 @@ export async function regeneratePostCreativeAssets(postId: string): Promise<Rege
   } catch (err) {
     const m = err instanceof Error ? err.message : "Lỗi không xác định.";
     return { ok: false, error: `Dựng lại ảnh thất bại: ${m}` };
+  }
+}
+
+export type OneStepResult =
+  | { ok: true; postId: string; imageCount: number; status: GeneratedPostStatus }
+  | { ok: false; postId?: string; error: string };
+
+/**
+ * Phase 17.2 — MỘT bước: caption + hook + 4 image prompt (1 call text) -> 4 ảnh thật.
+ * Chỉ ok=true khi đủ 4 ảnh thật (READY, không mock) -> PHOTO_ALBUM.
+ */
+export async function createAiPostWithCreatives(productId: string): Promise<OneStepResult> {
+  if (!productId || typeof productId !== "string") return { ok: false, error: "Thiếu mã sản phẩm." };
+
+  let supabase: SupabaseClient;
+  try {
+    supabase = createSupabaseAdminClient();
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Không kết nối được cơ sở dữ liệu: ${m}` };
+  }
+
+  try {
+    const { data: productData, error: productError } = await supabase
+      .from("products")
+      .select("*")
+      .eq("id", productId)
+      .single();
+    if (productError || !productData) return { ok: false, error: "Không tìm thấy sản phẩm." };
+    const product = productData as Product;
+    if (product.link_status !== "READY" || !product.affiliate_link) {
+      return { ok: false, error: "Sản phẩm chưa có link Affiliate hợp lệ. Vui lòng chuyển link trước." };
+    }
+
+    const input: ProductInput = {
+      id: product.id,
+      product_name: product.product_name,
+      affiliate_link: product.affiliate_link,
+      price_note: product.price_note,
+      target_customer: product.target_customer,
+      product_angle: product.product_angle,
+      image_url: product.image_url,
+    };
+
+    await insertPostingLog(supabase, null, ONE_STEP_STARTED, "SUCCESS", `Bắt đầu tạo bài AI 1 bước: ${product.product_name}.`, {
+      product_id: productId,
+    });
+
+    // 1) MỘT call text: caption + hook + 4 image prompts.
+    const bundle = await generateAffiliatePostBundle(input);
+    await insertPostingLog(supabase, null, ONE_STEP_TEXT_DONE, "SUCCESS", `Đã có caption + ${bundle.image_prompts.length} prompt ảnh.`, {
+      product_id: productId,
+    });
+
+    const status: GeneratedPostStatus =
+      bundle.score >= 80 && bundle.should_publish === true ? "READY" : "REJECTED";
+    const creative = buildCreativeFields(null, { visual_hook: bundle.hook, creative_brief: "" });
+
+    const { data: inserted, error: insertError } = await supabase
+      .from("generated_posts")
+      .insert({
+        product_id: productId,
+        caption: bundle.caption,
+        hook: bundle.hook,
+        ai_score: bundle.score,
+        safety_notes: bundle.safety_notes,
+        should_publish: bundle.should_publish,
+        status,
+        ...creative,
+        creative_pack_status: "PENDING",
+        creative_min_assets: 4,
+      })
+      .select("id")
+      .single();
+    if (insertError || !inserted) {
+      const m = insertError?.message ?? "không rõ";
+      await insertPostingLog(supabase, null, ONE_STEP_FAILED, "FAILED", `Lưu bài thất bại: ${m}`, { product_id: productId });
+      return { ok: false, error: `Lưu bài thất bại: ${m}` };
+    }
+    const postId = inserted.id as string;
+
+    // 2) Sinh 4 ảnh thật từ prompts (song song, có timeout).
+    await insertPostingLog(supabase, null, ONE_STEP_IMAGES_STARTED, "SUCCESS", "Bắt đầu sinh 4 ảnh.", {
+      generated_post_id: postId,
+    });
+    const packRes = await materializeImages(supabase, postId, bundle.image_prompts);
+    await insertPostingLog(supabase, postId, ONE_STEP_IMAGES_DONE, packRes.status === "READY" ? "SUCCESS" : "FAILED", `Ảnh thật: ${packRes.total}/4 (${packRes.status}).`, {
+      generated_post_id: postId,
+    });
+
+    revalidatePath("/dashboard/products");
+    revalidatePath("/dashboard/posts");
+    revalidatePath("/dashboard/calendar");
+
+    if (packRes.status === "READY") {
+      await insertPostingLog(supabase, postId, ONE_STEP_READY, "SUCCESS", `Bài AI sẵn sàng album 4 ảnh.`, {
+        generated_post_id: postId,
+      });
+      return { ok: true, postId, imageCount: packRes.total, status };
+    }
+
+    const error =
+      packRes.status === "PARTIAL"
+        ? `Chưa đủ 4 ảnh thật (${packRes.total}/4). Hãy thử lại tạo ảnh.`
+        : "Không tạo được ảnh thật cho bài viết. Kiểm tra IMAGE_PROVIDER / model ảnh.";
+    await insertPostingLog(supabase, postId, ONE_STEP_FAILED, "FAILED", error, { generated_post_id: postId });
+    return { ok: false, postId, error };
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Tạo bài AI thất bại: ${m}` };
   }
 }
 

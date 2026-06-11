@@ -4,7 +4,11 @@ import OpenAI from "openai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { getAIProvider, resolveProviderConfig } from "@/lib/ai/client";
-import { generateImageFromPrompt, getImageProvider } from "@/lib/creative/image-provider";
+import {
+  generateImageFromPrompt,
+  getImageProvider,
+  type PromptImageResult,
+} from "@/lib/creative/image-provider";
 import { insertPostingLog } from "@/lib/posts/log";
 import type { CreativePackStatus, PublishMode } from "@/lib/types";
 
@@ -196,29 +200,48 @@ async function uploadImageFromUrl(
   }
 }
 
+/** Prompt tối thiểu cho sinh ảnh (tương thích ImagePrompt & AiImagePrompt). */
+export type MinimalPrompt = {
+  prompt: string;
+  caption_overlay?: string | null;
+  visual_angle?: string | null;
+};
+
+const PER_IMAGE_TIMEOUT_MS = 30_000;
+const OVERALL_TIMEOUT_MS = 75_000;
+
+function failResult(provider: ReturnType<typeof getImageProvider>): PromptImageResult {
+  return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED" };
+}
+
 /**
- * PIPELINE: prompt pack -> sinh 4 ảnh thật -> lưu storage -> post_creative_assets -> cập nhật pack.
- * KHÔNG throw. Mock KHÔNG được tính là ảnh thật (không production-ready).
+ * Sinh ảnh thật từ bộ prompt (song song, có timeout) -> lưu Storage -> post_creative_assets -> cập nhật pack.
+ * KHÔNG throw. Mock KHÔNG tính là ảnh thật. Dùng cho one-step + regenerate.
  */
-export async function generatePostCreativePack(
+export async function materializeImages(
   supabase: SupabaseClient,
   postId: string,
-  ctx: PostImageContext,
+  promptsIn: MinimalPrompt[],
 ): Promise<GeneratePackResult> {
   const provider = getImageProvider();
+  const prompts = promptsIn.slice(0, MIN_ASSETS);
 
-  // 1) Prompt pack.
-  const prompts = await generateImagePromptPackForPost(ctx);
-  await insertPostingLog(supabase, postId, PROMPTS_CREATED, "SUCCESS", `Đã tạo ${prompts.length} prompt ảnh.`, {
+  await insertPostingLog(supabase, postId, GEN_STARTED, "SUCCESS", `Bắt đầu sinh ${prompts.length} ảnh (provider: ${provider}).`, {
     generated_post_id: postId,
   });
 
-  // 2) Sinh ảnh (song song 4 ảnh).
-  await insertPostingLog(supabase, postId, GEN_STARTED, "SUCCESS", `Bắt đầu sinh ảnh (provider: ${provider}).`, {
-    generated_post_id: postId,
-  });
-
-  const results = await Promise.all(prompts.map((p) => generateImageFromPrompt(p.prompt)));
+  // Per-image timeout 30s, song song; backstop tổng 75s.
+  const genOne = (pr: string): Promise<PromptImageResult> =>
+    Promise.race([
+      generateImageFromPrompt(pr),
+      new Promise<PromptImageResult>((res) => setTimeout(() => res(failResult(provider)), PER_IMAGE_TIMEOUT_MS)),
+    ]);
+  const results = await Promise.race([
+    Promise.all(prompts.map((p) => genOne(p.prompt))),
+    new Promise<PromptImageResult[]>((res) =>
+      setTimeout(() => res(prompts.map(() => failResult(provider))), OVERALL_TIMEOUT_MS),
+    ),
+  ]);
 
   // 3) Upload + dựng asset rows.
   type Row = {
@@ -254,14 +277,14 @@ export async function generatePostCreativePack(
       source_type: "AI_GENERATED",
       image_url: imageUrl,
       prompt: p.prompt,
-      caption_overlay: p.caption_overlay,
+      caption_overlay: p.caption_overlay ?? "",
       sort_order: i + 1,
       status: ok ? "READY" : "FAILED",
       metadata: {
-        visual_angle: p.visual_angle,
+        visual_angle: p.visual_angle ?? "",
         provider: r.provider,
         model: r.model,
-        generated_from: "AI_PROMPT",
+        generated_from: "ONE_STEP_AI_POST",
         mock: r.mock,
       },
     });
@@ -329,4 +352,20 @@ export async function generatePostCreativePack(
   );
 
   return { status, total: realReady, publish_mode };
+}
+
+/**
+ * Dựng pack từ context (tự sinh prompt pack rồi sinh ảnh). Dùng cho REGENERATE.
+ * One-step flow truyền thẳng prompts từ 1 call text -> dùng materializeImages.
+ */
+export async function generatePostCreativePack(
+  supabase: SupabaseClient,
+  postId: string,
+  ctx: PostImageContext,
+): Promise<GeneratePackResult> {
+  const prompts = await generateImagePromptPackForPost(ctx);
+  await insertPostingLog(supabase, postId, PROMPTS_CREATED, "SUCCESS", `Đã tạo ${prompts.length} prompt ảnh.`, {
+    generated_post_id: postId,
+  });
+  return materializeImages(supabase, postId, prompts);
 }

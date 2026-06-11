@@ -96,6 +96,47 @@ export function buildAffiliateUserPrompt(product: ProductInput): string {
 }
 
 /**
+ * Phase 17.2 — Bundle: 1 call text AI trả caption + hook + 4 image prompt.
+ */
+export const BUNDLE_SYSTEM_PROMPT = `Bạn là AI Agent viết bài Affiliate Shopee cho Facebook VÀ là giám đốc sáng tạo ảnh.
+Trong MỘT lần trả lời, hãy tạo: caption + hook + 4 prompt sinh ảnh minh hoạ (ảnh do AI tạo, không phải ảnh thật của shop).
+
+Caption: tự nhiên như người thật chia sẻ, hook mạnh 1-2 dòng đầu, có CTA nhẹ, có dòng "Bài có gắn link tiếp thị liên kết.", tối đa 900 ký tự, ≤5 hashtag. KHÔNG bịa giá, KHÔNG claim tuyệt đối; nếu giá chưa chắc thêm "giá có thể thay đổi theo thời điểm".
+
+4 prompt ảnh theo chiến lược: (1) hero product scene, (2) lifestyle/đang dùng, (3) detail/giải quyết vấn đề, (4) benefit/kích mua. Prompt viết bằng tiếng Anh cho mô hình ảnh, BÁM SÁT sản phẩm & nhóm hàng.
+RULE ảnh: KHÔNG bịa logo/nhãn hiệu/giá; KHÔNG screenshot giả; KHÔNG ảnh stock vô nghĩa; KHÔNG card trắng/placeholder; KHÔNG claim y tế. Ảnh là minh hoạ AI cho nội dung affiliate.
+
+Chấm điểm: 90-100 rất tốt; 80-89 đăng được; <80 nên sửa (should_publish=false).
+
+CHỈ trả về JSON đúng định dạng (không thêm text ngoài JSON):
+{
+  "caption": "",
+  "hook": "",
+  "ai_score": 0,
+  "should_publish": true,
+  "safety_note": "",
+  "image_prompts": [
+    {"image_title":"","prompt":"","visual_angle":"hero","caption_overlay":"","negative_prompt":""},
+    {"image_title":"","prompt":"","visual_angle":"lifestyle","caption_overlay":"","negative_prompt":""},
+    {"image_title":"","prompt":"","visual_angle":"detail","caption_overlay":"","negative_prompt":""},
+    {"image_title":"","prompt":"","visual_angle":"benefit","caption_overlay":"","negative_prompt":""}
+  ]
+}`;
+
+export function buildBundleUserPrompt(product: ProductInput): string {
+  return [
+    "Dữ liệu sản phẩm:",
+    `- product_name: ${product.product_name}`,
+    `- affiliate_link: ${product.affiliate_link}`,
+    `- price_note: ${product.price_note ?? "(không có)"}`,
+    `- target_customer: ${product.target_customer ?? "(không có)"}`,
+    `- product_angle: ${product.product_angle ?? "(không có)"}`,
+    "",
+    "Hãy tạo caption + hook + ĐÚNG 4 image_prompts bám sát sản phẩm. CHỈ trả về JSON đúng định dạng.",
+  ].join("\n");
+}
+
+/**
  * System prompt cho việc suy luận thông tin sản phẩm từ link affiliate + metadata.
  */
 export const INFER_PRODUCT_SYSTEM_PROMPT = `Bạn là trợ lý suy luận thông tin sản phẩm Shopee từ link affiliate và metadata công khai.

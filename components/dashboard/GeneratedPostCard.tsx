@@ -177,17 +177,22 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
             ) : null}
 
             <div className="mt-2 space-y-1">
-              {packStatus === "FAILED" ? (
-                <p className="text-xs font-medium text-red-700">Chưa tạo được ảnh thật cho bài viết.</p>
+              {packStatus === "READY" ? (
+                <p className="text-xs font-medium text-green-700">✅ Sẵn sàng album ảnh — {realThumbs.length}/4 ảnh thật.</p>
               ) : null}
               {packStatus === "PARTIAL" ? (
-                <p className="text-xs font-medium text-amber-700">Ảnh đang thiếu, chưa đủ 4 ảnh để đăng album.</p>
+                <p className="text-xs font-medium text-amber-700">Chưa đủ ảnh thật: {realThumbs.length}/4.</p>
+              ) : null}
+              {packStatus === "FAILED" ? (
+                <p className="text-xs font-medium text-red-700">Lỗi tạo ảnh: {post.creative_error ?? "Không tạo được ảnh thật."}</p>
               ) : null}
               {hasMockImage ? (
-                <p className="text-xs font-medium text-amber-700">⚠ Có ảnh mock — không tính cho đăng production. Cấu hình IMAGE_PROVIDER=openai để sinh ảnh thật.</p>
+                <p className="text-xs font-medium text-amber-700">⚠ Có ảnh mock — không tính cho đăng production. Đặt IMAGE_PROVIDER=v98 (hoặc openai) để sinh ảnh thật.</p>
               ) : null}
-              {post.creative_error ? <p className="text-xs text-gray-500">{post.creative_error}</p> : null}
-              {canRegenerate ? <RegenerateCreativeButton postId={post.id} /> : null}
+              {/* Regenerate chỉ là hành động khôi phục khi lỗi/thiếu ảnh. */}
+              {canRegenerate && (packStatus === "FAILED" || packStatus === "PARTIAL") ? (
+                <RegenerateCreativeButton postId={post.id} />
+              ) : null}
             </div>
           </div>
         ) : null}

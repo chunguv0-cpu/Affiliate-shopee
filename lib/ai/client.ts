@@ -5,6 +5,8 @@ import OpenAI from "openai";
 import {
   AFFILIATE_SYSTEM_PROMPT,
   buildAffiliateUserPrompt,
+  BUNDLE_SYSTEM_PROMPT,
+  buildBundleUserPrompt,
   INFER_PRODUCT_SYSTEM_PROMPT,
   buildInferProductUserPrompt,
 } from "@/lib/ai/prompt";
@@ -216,6 +218,128 @@ export async function generateAffiliateCaption(
     case "mock":
     default:
       return mockGenerate(product);
+  }
+}
+
+// ===========================================================================
+// Phase 17.2: 1 call text -> caption + hook + 4 image prompts (one-step)
+// ===========================================================================
+export type AiImagePrompt = {
+  image_title: string;
+  prompt: string;
+  visual_angle: string;
+  caption_overlay: string;
+  negative_prompt: string;
+};
+export type AiPostBundle = {
+  caption: string;
+  hook: string;
+  score: number;
+  should_publish: boolean;
+  safety_notes: string;
+  image_prompts: AiImagePrompt[];
+};
+
+const ANGLE_KEYS = ["hero", "lifestyle", "detail", "benefit"] as const;
+const ANGLE_OVERLAY: Record<string, string> = {
+  hero: "Sản phẩm nổi bật",
+  lifestyle: "Đang sử dụng",
+  detail: "Điểm nổi bật",
+  benefit: "Lý do nên mua",
+};
+const IMG_NEGATIVE =
+  "no fake brand logos, no fake packaging text, no invented prices, no fake screenshots, no fake reviews, no medical claims, no text overlay, no watermark, photorealistic, clean";
+
+function fallbackImagePrompts(product: ProductInput): AiImagePrompt[] {
+  return ANGLE_KEYS.map((angle) => ({
+    image_title: `${product.product_name} - ${angle}`,
+    prompt: `Photorealistic ${angle} image clearly related to "${product.product_name}". ${IMG_NEGATIVE}.`,
+    visual_angle: angle,
+    caption_overlay: ANGLE_OVERLAY[angle],
+    negative_prompt: IMG_NEGATIVE,
+  }));
+}
+
+function mockBundle(product: ProductInput): AiPostBundle {
+  const base = mockGenerate(product);
+  return {
+    caption: base.caption,
+    hook: base.hook,
+    score: base.score,
+    should_publish: base.should_publish,
+    safety_notes: base.safety_notes,
+    image_prompts: fallbackImagePrompts(product),
+  };
+}
+
+function parseBundle(raw: string, product: ProductInput): AiPostBundle {
+  const fb = mockBundle(product);
+  if (typeof raw !== "string" || !raw.trim()) return fb;
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start === -1 || end === -1) return fb;
+  let o: Record<string, unknown>;
+  try {
+    o = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return fb;
+  }
+  const str = (v: unknown, d = "") => (typeof v === "string" && v.trim() ? v.trim() : d);
+  const caption = str(o.caption);
+  let score = typeof o.ai_score === "number" && Number.isFinite(o.ai_score) ? o.ai_score : 0;
+  let should = typeof o.should_publish === "boolean" ? o.should_publish : false;
+  if (!caption) {
+    score = 0;
+    should = false;
+  }
+  const promptsRaw = Array.isArray(o.image_prompts) ? o.image_prompts : [];
+  const prompts: AiImagePrompt[] = promptsRaw
+    .map((x, i) => {
+      const p = (x ?? {}) as Record<string, unknown>;
+      const angle = str(p.visual_angle, ANGLE_KEYS[i % 4]);
+      return {
+        image_title: str(p.image_title, `${product.product_name} - ${angle}`),
+        prompt: str(p.prompt),
+        visual_angle: angle,
+        caption_overlay: str(p.caption_overlay, ANGLE_OVERLAY[angle] ?? ""),
+        negative_prompt: str(p.negative_prompt, IMG_NEGATIVE),
+      };
+    })
+    .filter((p) => p.prompt);
+  const image_prompts = prompts.length >= 4 ? prompts.slice(0, 4) : [...prompts, ...fallbackImagePrompts(product).slice(prompts.length, 4)];
+
+  return {
+    caption: caption || fb.caption,
+    hook: str(o.hook, fb.hook),
+    score,
+    should_publish: should,
+    safety_notes: str(o.safety_note ?? o.safety_notes),
+    image_prompts,
+  };
+}
+
+/**
+ * Một call text AI: caption + hook + 4 image prompts. KHÔNG throw (fallback mock).
+ */
+export async function generateAffiliatePostBundle(product: ProductInput): Promise<AiPostBundle> {
+  const provider = getAIProvider();
+  if (provider === "mock") return mockBundle(product);
+  try {
+    const { apiKey, baseURL, model } = resolveProviderConfig(provider);
+    const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+    const completion = await client.chat.completions.create({
+      model,
+      temperature: 0.7,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: BUNDLE_SYSTEM_PROMPT },
+        { role: "user", content: buildBundleUserPrompt(product) },
+      ],
+    });
+    const raw = completion.choices[0]?.message?.content ?? "";
+    return parseBundle(raw, product);
+  } catch {
+    return mockBundle(product);
   }
 }
 
