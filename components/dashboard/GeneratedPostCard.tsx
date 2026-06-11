@@ -1,6 +1,7 @@
 import CopyButton from "@/components/dashboard/CopyButton";
 import PostStatusBadge from "@/components/dashboard/PostStatusBadge";
 import PublishPostButton from "@/components/dashboard/PublishPostButton";
+import RegenerateCreativeButton from "@/components/dashboard/RegenerateCreativeButton";
 import RetryPostButton from "@/components/dashboard/RetryPostButton";
 import SchedulePostForm from "@/components/dashboard/SchedulePostForm";
 import {
@@ -67,12 +68,13 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
   const stateLabel = scheduleStateLabel(post);
   const creativeAssets = post.creative_assets ?? [];
   const readyAssets = creativeAssets.filter((a) => a.status === "READY" && a.image_url);
-  const readyAssetCount = readyAssets.length;
-  const productImageCount = readyAssets.filter((a) => a.source_type === "PRODUCT").length;
-  const aiImageCount = readyAssets.filter((a) => a.source_type === "AI_GENERATED").length;
-  const hasMockImage = readyAssets.some((a) => (a.image_url ?? "").includes("placehold.co"));
-  const missingProductImage =
-    post.creative_pack_status === "MISSING_PRODUCT_IMAGE" || (readyAssetCount > 0 && productImageCount === 0);
+  const isMockUrl = (u: string | null) => (u ?? "").includes("placehold.co");
+  // Chỉ ảnh THẬT (không mock) mới hiển thị như ảnh hoàn chỉnh.
+  const realThumbs = readyAssets.filter((a) => !isMockUrl(a.image_url));
+  const hasMockImage = readyAssets.some((a) => isMockUrl(a.image_url));
+  const packStatus = post.creative_pack_status ?? null;
+  const showPack = creativeAssets.length > 0 || (packStatus && packStatus !== "PENDING");
+  const canRegenerate = post.status !== "PUBLISHED" && post.status !== "PUBLISHING";
 
   return (
     <article className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -139,8 +141,8 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
 
       {/* Body */}
       <div className="space-y-4 px-5 py-4">
-        {/* Phase 17 V2 — Creative pack (gallery >= 4 ảnh) */}
-        {creativeAssets.length > 0 ? (
+        {/* Phase 17 — Creative pack ảnh AI thật (gallery 4 ảnh) */}
+        {showPack ? (
           <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-3">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
@@ -148,53 +150,44 @@ export default function GeneratedPostCard({ post }: { post: GeneratedPost }) {
               </span>
               <span
                 className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                  post.creative_pack_status === "READY"
+                  packStatus === "READY"
                     ? "bg-green-50 text-green-700"
-                    : post.creative_pack_status === "FAILED"
+                    : packStatus === "FAILED"
                       ? "bg-red-100 text-red-700"
                       : "bg-amber-50 text-amber-700"
                 }`}
               >
-                {post.creative_pack_status ? CREATIVE_PACK_STATUS_LABELS[post.creative_pack_status] : "—"}
+                {packStatus ? CREATIVE_PACK_STATUS_LABELS[packStatus] : "—"}
               </span>
               <span className="text-xs text-gray-500">
-                {readyAssetCount} ảnh · {productImageCount} thật / {aiImageCount} AI{post.creative_pack_mode ? ` · ${post.creative_pack_mode}` : ""}
+                {realThumbs.length}/4 ảnh thật{post.creative_pack_mode ? ` · ${post.creative_pack_mode}` : ""}
               </span>
             </div>
-            <div className="grid grid-cols-4 gap-2">
-              {creativeAssets.slice(0, 4).map((a, i) =>
-                a.image_url ? (
+
+            {realThumbs.length > 0 ? (
+              <div className="grid grid-cols-4 gap-2">
+                {realThumbs.slice(0, 4).map((a, i) => (
                   <div key={i} className="relative">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={a.image_url} alt="" className="aspect-square w-full rounded-md border border-gray-200 object-cover" />
-                    <span className="absolute bottom-0.5 left-0.5 rounded bg-black/55 px-1 text-[10px] font-medium text-white">
-                      {a.source_type === "PRODUCT" ? "Sản phẩm" : a.source_type === "FOUND" ? "Tìm" : "AI"}
-                    </span>
+                    <img src={a.image_url as string} alt="" className="aspect-square w-full rounded-md border border-gray-200 object-cover" />
+                    <span className="absolute bottom-0.5 left-0.5 rounded bg-black/55 px-1 text-[10px] font-medium text-white">AI</span>
                   </div>
-                ) : (
-                  <div key={i} className="flex aspect-square w-full items-center justify-center rounded-md border border-dashed border-gray-300 text-gray-300">×</div>
-                ),
-              )}
-            </div>
+                ))}
+              </div>
+            ) : null}
+
             <div className="mt-2 space-y-1">
-              {missingProductImage ? (
-                <p className="text-xs font-medium text-red-700">⛔ Thiếu ảnh thật sản phẩm</p>
+              {packStatus === "FAILED" ? (
+                <p className="text-xs font-medium text-red-700">Chưa tạo được ảnh thật cho bài viết.</p>
               ) : null}
-              {post.creative_pack_mode === "GENERATED_ONLY" ? (
-                <p className="text-xs font-medium text-red-700">⛔ Chỉ có ảnh AI — không được đăng</p>
+              {packStatus === "PARTIAL" ? (
+                <p className="text-xs font-medium text-amber-700">Ảnh đang thiếu, chưa đủ 4 ảnh để đăng album.</p>
               ) : null}
               {hasMockImage ? (
-                <p className="text-xs font-medium text-amber-700">⚠ Ảnh mock — không được đăng production</p>
+                <p className="text-xs font-medium text-amber-700">⚠ Có ảnh mock — không tính cho đăng production. Cấu hình IMAGE_PROVIDER=openai để sinh ảnh thật.</p>
               ) : null}
-              {readyAssetCount < 4 && !missingProductImage ? (
-                <p className="text-xs font-medium text-amber-700">⚠ Chưa đủ 4 ảnh</p>
-              ) : null}
-              {post.creative_pack_status === "FAILED" ? (
-                <p className="text-xs font-medium text-red-700">Creative failed{post.creative_error ? `: ${post.creative_error}` : ""}</p>
-              ) : null}
-              {missingProductImage ? (
-                <p className="text-xs text-gray-500">Vui lòng bổ sung image_url thật cho sản phẩm hoặc import lại link có ảnh.</p>
-              ) : null}
+              {post.creative_error ? <p className="text-xs text-gray-500">{post.creative_error}</p> : null}
+              {canRegenerate ? <RegenerateCreativeButton postId={post.id} /> : null}
             </div>
           </div>
         ) : null}

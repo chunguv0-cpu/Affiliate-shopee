@@ -33,7 +33,56 @@ export type GeneratedImage = {
 export function getImageProvider(): ImageProvider {
   const raw = process.env.IMAGE_PROVIDER?.trim().toLowerCase();
   if (raw === "openai" || raw === "none" || raw === "mock") return raw;
+  // Mặc định: có OPENAI_API_KEY thì sinh ảnh thật, ngược lại mock (chỉ để test).
+  if (process.env.OPENAI_API_KEY?.trim()) return "openai";
   return "mock";
+}
+
+/** Kết quả sinh 1 ảnh từ prompt cụ thể (Phase 17 — fully AI). */
+export type PromptImageResult = {
+  b64: string | null; // ảnh thật (base64 png) -> upload storage
+  url: string | null; // chỉ dùng cho mock (placeholder)
+  mock: boolean;
+  provider: ImageProvider;
+  model: string | null;
+  status: "READY" | "FAILED";
+};
+
+/**
+ * Sinh MỘT ảnh từ prompt do AI text tạo. KHÔNG throw.
+ * - openai: trả base64 (response_format b64_json cho dall-e-*; gpt-image-* trả b64 mặc định).
+ * - mock: trả URL placeholder, mock=true (KHÔNG production-ready).
+ */
+export async function generateImageFromPrompt(prompt: string): Promise<PromptImageResult> {
+  const provider = getImageProvider();
+  if (provider === "none") {
+    return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED" };
+  }
+  if (provider === "mock") {
+    const url = `https://placehold.co/1024x1024/png?text=${encodeURIComponent("AI mock")}`;
+    return { b64: null, url, mock: true, provider, model: "mock", status: "READY" };
+  }
+  // openai
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const model = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
+  if (!apiKey) return { b64: null, url: null, mock: false, provider, model, status: "FAILED" };
+  try {
+    const client = new OpenAI({ apiKey });
+    const isGptImage = /gpt-image/i.test(model);
+    const params: Record<string, unknown> = { model, prompt, n: 1, size: "1024x1024" };
+    // dall-e-* cần response_format để lấy b64; gpt-image-* trả b64 mặc định.
+    if (!isGptImage) params.response_format = "b64_json";
+    const res = (await client.images.generate(
+      params as unknown as Parameters<typeof client.images.generate>[0],
+    )) as unknown as { data?: Array<{ b64_json?: string | null; url?: string | null }> };
+    const b64 = res.data?.[0]?.b64_json ?? null;
+    const url = res.data?.[0]?.url ?? null;
+    if (b64) return { b64, url: null, mock: false, provider, model, status: "READY" };
+    if (url) return { b64: null, url, mock: false, provider, model, status: "READY" };
+    return { b64: null, url: null, mock: false, provider, model, status: "FAILED" };
+  } catch {
+    return { b64: null, url: null, mock: false, provider, model, status: "FAILED" };
+  }
 }
 
 /** 4 phong cách ảnh creative (lifestyle / use-case / spotlight / benefit). */

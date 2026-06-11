@@ -8,7 +8,7 @@ import {
   type GeneratedCaptionResult,
   type ProductInput,
 } from "@/lib/ai/client";
-import { buildCreativePackForPost } from "@/lib/creative/pack";
+import { generatePostCreativePack } from "@/lib/creative/generate-post-images";
 import { buildCreativeFields } from "@/lib/posts/creative";
 import { insertPostingLog } from "@/lib/posts/log";
 import { publishGeneratedPostById } from "@/lib/posts/publish";
@@ -197,9 +197,16 @@ export async function generatePostFromProduct(
       result,
     );
 
-    // 6) Phase 17 V2 — dựng pack >= 4 ảnh cho bài READY.
+    // 6) Phase 17 — dựng pack 4 ảnh AI thật cho bài READY.
     if (status === "READY") {
-      await buildCreativePackForPost(supabase, postId, product, result);
+      await generatePostCreativePack(supabase, postId, {
+        product_name: product.product_name,
+        target_customer: product.target_customer,
+        product_angle: product.product_angle,
+        hook: result.visual_hook || result.hook,
+        caption_summary: result.caption,
+        affiliate_link: product.affiliate_link,
+      });
     }
 
     revalidatePath("/dashboard/products");
@@ -209,6 +216,54 @@ export async function generatePostFromProduct(
   } catch (err) {
     const message = err instanceof Error ? err.message : "Lỗi không xác định.";
     return { ok: false, error: `Tạo bài AI thất bại: ${message}` };
+  }
+}
+
+/** Kết quả regenerate creative pack. */
+export type RegenerateResult = { ok: true; status: string; total: number } | { ok: false; error: string };
+
+/**
+ * Phase 17 — dựng lại pack 4 ảnh AI cho một bài (xóa pack cũ, sinh mới).
+ */
+export async function regeneratePostCreativeAssets(postId: string): Promise<RegenerateResult> {
+  if (!postId || typeof postId !== "string") return { ok: false, error: "Thiếu mã bài đăng." };
+  let supabase: SupabaseClient;
+  try {
+    supabase = createSupabaseAdminClient();
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Không kết nối được cơ sở dữ liệu: ${m}` };
+  }
+  try {
+    const { data, error } = await supabase
+      .from("generated_posts")
+      .select("id, caption, hook, products(product_name, target_customer, product_angle, affiliate_link)")
+      .eq("id", postId)
+      .single();
+    if (error || !data) return { ok: false, error: "Không tìm thấy bài đăng." };
+    const row = data as {
+      caption: string | null;
+      hook: string | null;
+      products:
+        | { product_name?: string; target_customer?: string | null; product_angle?: string | null; affiliate_link?: string | null }
+        | Array<{ product_name?: string; target_customer?: string | null; product_angle?: string | null; affiliate_link?: string | null }>
+        | null;
+    };
+    const product = Array.isArray(row.products) ? row.products[0] : row.products;
+    const r = await generatePostCreativePack(supabase, postId, {
+      product_name: product?.product_name ?? "Sản phẩm",
+      target_customer: product?.target_customer ?? null,
+      product_angle: product?.product_angle ?? null,
+      hook: row.hook,
+      caption_summary: row.caption,
+      affiliate_link: product?.affiliate_link ?? null,
+    });
+    revalidatePath("/dashboard/posts");
+    revalidatePath("/dashboard/calendar");
+    return { ok: true, status: r.status, total: r.total };
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Dựng lại ảnh thất bại: ${m}` };
   }
 }
 

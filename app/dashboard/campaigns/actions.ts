@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { generateAffiliateCaption, type ProductInput } from "@/lib/ai/client";
-import { buildCreativePackForPost } from "@/lib/creative/pack";
+import { generatePostCreativePack } from "@/lib/creative/generate-post-images";
 import { buildCreativeFields } from "@/lib/posts/creative";
 import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -315,9 +315,16 @@ export async function createCampaignAndSchedulePosts(
           { campaign_id: campaignId },
         );
 
-        // Phase 17 V2 — dựng pack >= 4 ảnh cho bài READY.
+        // Phase 17 — dựng pack 4 ảnh AI thật cho bài READY.
         if (status === "READY") {
-          await buildCreativePackForPost(supabase, inserted.id as string, product, result);
+          await generatePostCreativePack(supabase, inserted.id as string, {
+            product_name: product.product_name,
+            target_customer: product.target_customer,
+            product_angle: angle ?? product.product_angle,
+            hook: result.visual_hook || result.hook,
+            caption_summary: result.caption,
+            affiliate_link: product.affiliate_link,
+          });
         }
       } catch (err) {
         // Lỗi AI cho 1 sản phẩm: ghi bài FAILED + log, KHÔNG dừng cả chiến dịch.

@@ -173,26 +173,19 @@ export async function publishGeneratedPostById(
         source_type: string | null;
         metadata: unknown;
       }>;
-      const isProd = process.env.NODE_ENV === "production";
       const isMock = (m: unknown) =>
         !!m && typeof m === "object" && (m as Record<string, unknown>).mock === true;
-      // Chỉ ảnh có URL hợp lệ; ở production loại bỏ ảnh mock.
+      // Chỉ ảnh URL hợp lệ; LUÔN loại ảnh mock (không production-ready). Ảnh AI thật được phép.
       const usable = rows.filter((a) => {
         const url = (a.image_url ?? "").trim();
         if (!/^https?:\/\//i.test(url)) return false;
-        if (isProd && isMock(a.metadata)) return false;
+        if (isMock(a.metadata)) return false;
         return true;
       });
-      const hasProductImage = usable.some((a) => a.source_type === "PRODUCT");
-      if (!hasProductImage) {
-        const msg = "Album cần ít nhất 1 ảnh THẬT của sản phẩm (source PRODUCT). Không đăng album chỉ gồm ảnh AI/mock.";
-        await failPost(msg, "CREATIVE_PRODUCT_IMAGE_REQUIRED");
-        return { ok: false, error: msg };
-      }
       albumUrls = usable.map((a) => (a.image_url as string).trim());
       if (albumUrls.length < 4) {
-        const msg = `Album cần >= 4 ảnh hợp lệ (đã loại ảnh mock ở production) nhưng chỉ có ${albumUrls.length}.`;
-        await failPost(msg, "CREATIVE_PRODUCT_IMAGE_REQUIRED");
+        const msg = `Album cần >= 4 ảnh thật (đã loại ảnh mock) nhưng chỉ có ${albumUrls.length}.`;
+        await failPost(msg, "PUBLISH_FACEBOOK_PHOTO_ALBUM_FAILED");
         return { ok: false, error: msg };
       }
     }

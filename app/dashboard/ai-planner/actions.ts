@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import type { CampaignGoal, PlannerProduct } from "@/lib/ai/campaign-planner";
 import { generateAffiliateCaption, type ProductInput } from "@/lib/ai/client";
 import { normalizeCampaignPlan } from "@/lib/ai/normalize-campaign-plan";
-import { buildCreativePackForPost } from "@/lib/creative/pack";
+import { generatePostCreativePack } from "@/lib/creative/generate-post-images";
 import { buildCreativeFields } from "@/lib/posts/creative";
 import { validateCampaignPlanQuality } from "@/lib/ai/plan-quality-checker";
 import {
@@ -1226,7 +1226,14 @@ export async function convertAiRecommendationToCampaign(
         }
         if (status === "READY") {
           createdPosts += 1;
-          await buildCreativePackForPost(supabase, insertedPost.id as string, product, result);
+          await generatePostCreativePack(supabase, insertedPost.id as string, {
+            product_name: product.product_name,
+            target_customer: product.target_customer,
+            product_angle: angle ?? product.product_angle,
+            hook: result.visual_hook || result.hook,
+            caption_summary: result.caption,
+            affiliate_link: product.affiliate_link,
+          });
         } else rejectedPosts += 1;
       } catch {
         failedPosts += 1;
