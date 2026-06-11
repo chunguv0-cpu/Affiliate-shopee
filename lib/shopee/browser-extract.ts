@@ -25,6 +25,8 @@ type ProxyConfig = {
   browserlessProxyCountry: string | null;
   browserlessProxySticky: string | null;
   browserlessProxyLocaleMatch: string | null;
+  customProxySource: "BROWSERLESS_PROXY_URL" | "BROWSERLESS_PROXY" | null;
+  browserlessProxyEnvLooksCustom: boolean;
   externalProxyServer: string | null;
   chromeProxyServer: string | null;
   username: string | null;
@@ -80,14 +82,26 @@ function parseExternalProxyServer(raw: string | null): {
   return { externalProxyServer: value, chromeProxyServer: value, username: null, password: null };
 }
 
+function looksLikeExternalProxy(value: string | null): boolean {
+  const raw = value?.trim();
+  if (!raw) return false;
+  if (/^https?:\/\//i.test(raw)) return true;
+  const parts = raw.split(":");
+  return parts.length >= 2 && /^\d+$/.test(parts[1]);
+}
+
 function readProxyConfig(): ProxyConfig {
   const rawMode = process.env.BROWSERLESS_PROXY_MODE?.trim().toLowerCase();
   const mode: ProxyConfig["mode"] = rawMode === "chrome_arg" ? "chrome_arg" : "external";
-  const browserlessProxy = process.env.BROWSERLESS_PROXY?.trim() || null;
+  const rawBrowserlessProxy = process.env.BROWSERLESS_PROXY?.trim() || null;
+  const rawProxyUrl = process.env.BROWSERLESS_PROXY_URL?.trim() || null;
+  const browserlessProxyEnvLooksCustom = looksLikeExternalProxy(rawBrowserlessProxy);
+  const rawCustomProxy = rawProxyUrl || (browserlessProxyEnvLooksCustom ? rawBrowserlessProxy : null);
+  const customProxySource = rawProxyUrl ? "BROWSERLESS_PROXY_URL" : browserlessProxyEnvLooksCustom ? "BROWSERLESS_PROXY" : null;
+  const browserlessProxy = browserlessProxyEnvLooksCustom ? null : rawBrowserlessProxy;
   const browserlessProxyCountry = process.env.BROWSERLESS_PROXY_COUNTRY?.trim() || null;
   const browserlessProxySticky = process.env.BROWSERLESS_PROXY_STICKY?.trim() || null;
   const browserlessProxyLocaleMatch = process.env.BROWSERLESS_PROXY_LOCALE_MATCH?.trim() || null;
-  const rawCustomProxy = process.env.BROWSERLESS_PROXY_URL?.trim() || null;
   const parsed = parseExternalProxyServer(rawCustomProxy);
 
   return {
@@ -96,11 +110,25 @@ function readProxyConfig(): ProxyConfig {
     browserlessProxyCountry,
     browserlessProxySticky,
     browserlessProxyLocaleMatch,
+    customProxySource,
+    browserlessProxyEnvLooksCustom,
     ...parsed,
   };
 }
 
-function buildWsEndpoint(): string | null {
+function addProxyDiagnostics(diagnostics: Record<string, unknown>, proxy: ProxyConfig): void {
+  diagnostics.browserlessProxyEnabled = Boolean(proxy.browserlessProxy || proxy.externalProxyServer);
+  diagnostics.browserlessProxyMode = proxy.browserlessProxy ? "browserless" : proxy.externalProxyServer ? proxy.mode : "none";
+  diagnostics.browserlessProxyCountry = proxy.browserlessProxyCountry ?? null;
+  diagnostics.browserlessProxySticky = proxy.browserlessProxySticky ?? null;
+  diagnostics.browserlessProxyLocaleMatch = proxy.browserlessProxyLocaleMatch ?? null;
+  diagnostics.browserlessExternalProxyConfigured = Boolean(proxy.externalProxyServer);
+  diagnostics.browserlessProxyAuth = Boolean(proxy.username && proxy.password);
+  diagnostics.browserlessProxySource = proxy.customProxySource ?? (proxy.browserlessProxy ? "BROWSERLESS_PROXY" : null);
+  diagnostics.browserlessProxyEnvLooksCustom = proxy.browserlessProxyEnvLooksCustom;
+}
+
+function buildWsEndpoint(proxy: ProxyConfig): string | null {
   let ep = process.env.BROWSERLESS_WS_ENDPOINT?.trim();
   if (!ep) return null;
   const token = process.env.BROWSERLESS_API_TOKEN?.trim();
@@ -112,7 +140,6 @@ function buildWsEndpoint(): string | null {
   const timeout = process.env.BROWSERLESS_TIMEOUT_MS?.trim() || "60000";
   if (timeout && !/[?&]timeout=/.test(ep)) ep = appendParam(ep, "timeout", timeout);
 
-  const proxy = readProxyConfig();
   if (proxy.browserlessProxy && !/[?&]proxy=/.test(ep)) ep = appendParam(ep, "proxy", proxy.browserlessProxy);
   if (proxy.browserlessProxyCountry && !/[?&]proxyCountry=/.test(ep)) {
     ep = appendParam(ep, "proxyCountry", proxy.browserlessProxyCountry);
@@ -153,23 +180,33 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
   const diagnostics: Record<string, unknown> = {
     strategiesTried: ["browser-dom-img-scan", "browser-background-image-scan", "browser-network-image-capture"],
   };
+  const proxy = readProxyConfig();
+  addProxyDiagnostics(diagnostics, proxy);
   if (!isBrowserExtractConfigured()) {
     return { ok: false, image_urls: [], status: "NOT_CONFIGURED", error: "Browser extractor chưa cấu hình.", diagnostics };
   }
-  const wsEndpoint = buildWsEndpoint();
+  const wsEndpoint = buildWsEndpoint(proxy);
   if (!wsEndpoint) return { ok: false, image_urls: [], status: "NOT_CONFIGURED", error: "Thiếu BROWSERLESS_WS_ENDPOINT.", diagnostics };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let browser: any = null;
+  let stage = "connect";
   try {
-    const proxy = readProxyConfig();
+    diagnostics.browserExtractionStage = "import_puppeteer";
     const mod = (await import("puppeteer-core")) as unknown as { default: { connect: (o: { browserWSEndpoint: string }) => Promise<unknown> } };
+    diagnostics.browserExtractionStage = stage;
     browser = await mod.default.connect({ browserWSEndpoint: wsEndpoint });
+    stage = "new_page";
+    diagnostics.browserExtractionStage = stage;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const page: any = await browser.newPage();
     if (proxy.mode === "chrome_arg" && proxy.username && proxy.password && typeof page.authenticate === "function") {
+      stage = "proxy_auth";
+      diagnostics.browserExtractionStage = stage;
       await page.authenticate({ username: proxy.username, password: proxy.password });
     }
+    stage = "set_headers";
+    diagnostics.browserExtractionStage = stage;
     await page.setUserAgent(UA);
     try {
       await page.setExtraHTTPHeaders({ "Accept-Language": "vi-VN,vi;q=0.9" });
@@ -190,7 +227,11 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
       }
     });
 
+    stage = "goto";
+    diagnostics.browserExtractionStage = stage;
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
+    stage = "lazy_load";
+    diagnostics.browserExtractionStage = stage;
     await sleep(3500);
     // Scroll để kích lazy-load.
     await page.evaluate(() => window.scrollTo(0, Math.floor(document.body.scrollHeight / 2))).catch(() => {});
@@ -198,6 +239,8 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
     await sleep(2000);
 
+    stage = "scan_dom";
+    diagnostics.browserExtractionStage = stage;
     const dom = (await page
       .evaluate(() => {
         const urls: string[] = [];
@@ -255,13 +298,6 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
 
     diagnostics.browserFinalUrl = finalUrl;
     diagnostics.browserPageTitle = pageTitle;
-    diagnostics.browserlessProxyEnabled = Boolean(proxy.browserlessProxy || proxy.externalProxyServer);
-    diagnostics.browserlessProxyMode = proxy.browserlessProxy ? "browserless" : proxy.externalProxyServer ? proxy.mode : "none";
-    diagnostics.browserlessProxyCountry = proxy.browserlessProxyCountry ?? null;
-    diagnostics.browserlessProxySticky = proxy.browserlessProxySticky ?? null;
-    diagnostics.browserlessProxyLocaleMatch = proxy.browserlessProxyLocaleMatch ?? null;
-    diagnostics.browserlessExternalProxyConfigured = Boolean(proxy.externalProxyServer);
-    diagnostics.browserlessProxyAuth = Boolean(proxy.username && proxy.password);
     diagnostics.browserImgTagCount = dom.imgCount;
     diagnostics.browserBackgroundImageCount = dom.bgCount;
     diagnostics.browserNetworkImageCount = networkImages.size;
@@ -274,6 +310,7 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
 
     return { ok: finalImages.length > 0, image_urls: finalImages, status: "SUCCESS", error: null, diagnostics };
   } catch (err) {
+    diagnostics.browserExtractionStage = stage;
     diagnostics.browserError = err instanceof Error ? err.message.slice(0, 200) : "browser error";
     return { ok: false, image_urls: [], status: "FAILED", error: diagnostics.browserError as string, diagnostics };
   } finally {

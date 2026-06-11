@@ -74,6 +74,15 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
               {d.browserFinalUrl ? (
                 <div className="sm:col-span-2">Browser final URL: <span className="break-all text-gray-800">{String(d.browserFinalUrl)}</span></div>
               ) : null}
+              {d.browserExtractionError || d.browserError ? (
+                <div className="sm:col-span-2">Browser error: <span className="break-all text-gray-800">{String(d.browserExtractionError ?? d.browserError)}</span></div>
+              ) : null}
+              {d.browserExtractionStage ? (
+                <div>Browser stage: <span className="text-gray-800">{String(d.browserExtractionStage)}</span></div>
+              ) : null}
+              {d.browserlessProxySource ? (
+                <div>Proxy source: <span className="text-gray-800">{String(d.browserlessProxySource)}</span></div>
+              ) : null}
               {d.browserlessProxyEnabled !== undefined ? (
                 <>
                   <div>Proxy: <span className="text-gray-800">{d.browserlessProxyEnabled ? "đang bật" : "chưa bật"}</span></div>
