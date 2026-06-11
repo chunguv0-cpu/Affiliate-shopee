@@ -8,7 +8,11 @@ import {
   summarizeProductVisualIdentity,
   type ProductInput,
 } from "@/lib/ai/client";
-import { generateAndStoreImageAsset, storeSourceProductImage } from "@/lib/creative/generate-post-images";
+import {
+  enhanceAndStoreSourceProductImage,
+  generateAndStoreImageAsset,
+  storeSourceProductImage,
+} from "@/lib/creative/generate-post-images";
 import { insertPostingLog } from "@/lib/posts/log";
 import { fetchProductDataFromProvider, getProductDataProvider } from "@/lib/product/product-data-provider";
 import { extractShopeeImagesWithBrowser, getShopeeImageSourceProvider } from "@/lib/shopee/browser-extract";
@@ -29,6 +33,7 @@ const RATE_LIMIT_RETRY_DELAY_MS = readIntEnv("AI_JOB_RATE_LIMIT_RETRY_DELAY_MS",
 const MAX_RETRY_DELAY_MS = readIntEnv("AI_JOB_MAX_RETRY_DELAY_MS", 15 * 60 * 1000, 0, 2 * 60 * 60 * 1000);
 const FAST_SOURCE_ALBUM = readBoolEnv("AI_JOB_FAST_SOURCE_ALBUM", true);
 const FAST_SOURCE_ALBUM_MIN_IMAGES = readIntEnv("AI_JOB_FAST_SOURCE_ALBUM_MIN_IMAGES", 4, 1, 4);
+const ENHANCE_SOURCE_ALBUM = readBoolEnv("AI_JOB_ENHANCE_SOURCE_ALBUM", true);
 
 // Logs.
 const STEP_STARTED = "AI_JOB_STEP_STARTED";
@@ -548,15 +553,29 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         let storedCount = 0;
         const storeErrors: string[] = [];
         for (let i = 1; i < Math.min(4, sourceImages.length); i += 1) {
-          const stored = await storeSourceProductImage(supabase, postId, i + 1, sourceImages[i], {
-            generatedFrom: "SHOPEE_SOURCE_FAST_ALBUM",
-            captionOverlay: "Shopee product image",
-            metadata: {
-              source_image_origin: sourceOrigin,
-              exact_product_evidence: true,
-              fast_source_album: true,
-            },
-          });
+          const promptForImage = bundle.image_prompts[i - 1];
+          const metadata = {
+            source_image_origin: sourceOrigin,
+            exact_product_evidence: true,
+            fast_source_album: true,
+            enhanced: ENHANCE_SOURCE_ALBUM,
+          };
+          const enhanced = ENHANCE_SOURCE_ALBUM
+            ? await enhanceAndStoreSourceProductImage(supabase, postId, i + 1, sourceImages[i], {
+                generatedFrom: "SHOPEE_SOURCE_FAST_ALBUM_ENHANCED",
+                overlay: overlays[i - 1] ?? promptForImage?.caption_overlay ?? "",
+                productName: productInput.product_name,
+                visualAngle: promptForImage?.visual_angle ?? null,
+                metadata,
+              })
+            : { ok: false, image_url: null, error: "source enhancement disabled" };
+          const stored = enhanced.ok
+            ? enhanced
+            : await storeSourceProductImage(supabase, postId, i + 1, sourceImages[i], {
+                generatedFrom: "SHOPEE_SOURCE_FAST_ALBUM",
+                captionOverlay: "Shopee product image",
+                metadata: { ...metadata, enhanced: false, enhance_error: enhanced.error ?? null },
+              });
           if (stored.ok) storedCount += 1;
           else if (stored.error) storeErrors.push(stored.error);
         }
@@ -579,6 +598,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
               ai_score: bundle.score,
               should_publish: bundle.should_publish,
               fast_source_album: true,
+              enhanced_source_album: ENHANCE_SOURCE_ALBUM,
             },
           });
         }

@@ -144,6 +144,7 @@ export async function generateImagePromptPackForPost(ctx: PostImageContext): Pro
 }
 
 type UploadOutcome = { url: string | null; error: string | null };
+type ImageBufferOutcome = { buffer: Buffer | null; contentType: string; error: string | null };
 
 /** Upload buffer ảnh lên Supabase Storage, trả public URL + error đọc được. */
 async function uploadBuffer(
@@ -214,6 +215,100 @@ async function uploadImageFromUrl(
   } catch (err) {
     return { url: null, error: err instanceof Error ? err.message.slice(0, 200) : "Re-host failed." };
   }
+}
+
+async function fetchImageBuffer(url: string): Promise<ImageBufferOutcome> {
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 12000);
+    let res: Response;
+    try {
+      res = await fetch(url, { cache: "no-store", signal: controller.signal });
+    } finally {
+      clearTimeout(t);
+    }
+    if (!res.ok) return { buffer: null, contentType: "image/png", error: `Fetch image URL failed: HTTP ${res.status}` };
+    const contentType = res.headers.get("content-type") ?? "image/png";
+    if (!contentType.startsWith("image/")) return { buffer: null, contentType: "image/png", error: "URL did not return an image." };
+    return { buffer: Buffer.from(await res.arrayBuffer()), contentType, error: null };
+  } catch (err) {
+    return { buffer: null, contentType: "image/png", error: err instanceof Error ? err.message.slice(0, 200) : "Fetch image failed." };
+  }
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function shortText(value: string | null | undefined, fallback: string, max = 34): string {
+  const clean = (value ?? "").replace(/\s+/g, " ").trim() || fallback;
+  return clean.length > max ? `${clean.slice(0, max - 1).trim()}…` : clean;
+}
+
+function buildEnhancementSvg(input: {
+  overlay: string;
+  productName: string;
+  sortOrder: number;
+  visualAngle?: string | null;
+}): Buffer {
+  const palettes = [
+    { accent: "#ef4444", accent2: "#0f766e", dark: "#111827", soft: "#fff7ed" },
+    { accent: "#2563eb", accent2: "#f59e0b", dark: "#0f172a", soft: "#eff6ff" },
+    { accent: "#16a34a", accent2: "#7c3aed", dark: "#14532d", soft: "#f0fdf4" },
+  ];
+  const p = palettes[(input.sortOrder - 1) % palettes.length];
+  const overlay = xmlEscape(shortText(input.overlay, "Đáng xem hôm nay", 32));
+  const product = xmlEscape(shortText(input.productName, "Sản phẩm nổi bật", 42));
+  const badge =
+    input.visualAngle === "detail"
+      ? "Chi tiết đáng chú ý"
+      : input.visualAngle === "benefit"
+        ? "Lợi ích rõ ràng"
+        : input.visualAngle === "lifestyle"
+          ? "Dễ dùng mỗi ngày"
+          : "Gợi ý hôm nay";
+  const stickerA = input.sortOrder % 2 === 0 ? "Tiện lợi" : "Dễ chọn";
+  const stickerB = input.sortOrder % 3 === 0 ? "Nổi bật" : "Đáng mua";
+  const svg = `
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#111827" flood-opacity="0.22"/>
+    </filter>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.56"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" fill="none"/>
+  <rect x="0" y="650" width="1024" height="374" fill="url(#fade)"/>
+  <g filter="url(#shadow)">
+    <rect x="58" y="64" rx="26" ry="26" width="264" height="64" fill="${p.accent}"/>
+    <text x="190" y="104" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#ffffff">${xmlEscape(badge)}</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="688" y="72" rx="30" ry="30" width="244" height="58" fill="${p.soft}" stroke="${p.accent2}" stroke-width="3"/>
+    <text x="810" y="109" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700" fill="${p.dark}">${xmlEscape(stickerA)}</text>
+  </g>
+  <g filter="url(#shadow)">
+    <circle cx="884" cy="204" r="62" fill="${p.accent2}"/>
+    <text x="884" y="197" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" fill="#ffffff">${xmlEscape(stickerB)}</text>
+    <text x="884" y="226" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#ffffff">+</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="58" y="748" rx="32" ry="32" width="908" height="188" fill="#ffffff" fill-opacity="0.94"/>
+    <rect x="58" y="748" rx="32" ry="32" width="14" height="188" fill="${p.accent}"/>
+    <text x="106" y="814" font-family="Arial, Helvetica, sans-serif" font-size="50" font-weight="800" fill="${p.dark}">${overlay}</text>
+    <text x="108" y="864" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="600" fill="#475569">${product}</text>
+    <rect x="108" y="892" rx="18" ry="18" width="178" height="42" fill="${p.accent}" fill-opacity="0.12"/>
+    <text x="197" y="921" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="${p.accent}">Xem chi tiết</text>
+  </g>
+</svg>`;
+  return Buffer.from(svg);
 }
 
 /** Prompt tối thiểu cho sinh ảnh (tương thích ImagePrompt & AiImagePrompt). */
@@ -522,6 +617,71 @@ export async function storeSourceProductImage(
     return { ok: false, image_url: null, error: err instanceof Error ? err.message.slice(0, 200) : "Insert source asset failed." };
   }
   return { ok: true, image_url: finalUrl, error: null };
+}
+
+export async function enhanceAndStoreSourceProductImage(
+  supabase: SupabaseClient,
+  postId: string,
+  sortOrder: number,
+  imageUrl: string,
+  options: {
+    overlay?: string | null;
+    productName?: string | null;
+    visualAngle?: string | null;
+    generatedFrom?: string;
+    metadata?: Record<string, unknown>;
+  } = {},
+): Promise<{ ok: boolean; image_url: string | null; error: string | null }> {
+  const src = (imageUrl ?? "").trim();
+  if (!/^https?:\/\//i.test(src)) return { ok: false, image_url: null, error: "Source image URL khong hop le." };
+  try {
+    const fetched = await fetchImageBuffer(src);
+    if (!fetched.buffer) return { ok: false, image_url: null, error: fetched.error };
+    const sharp = (await import("sharp")).default;
+    const base = await sharp(fetched.buffer)
+      .rotate()
+      .resize(1024, 1024, { fit: "contain", background: "#f8fafc" })
+      .png()
+      .toBuffer();
+    const overlaySvg = buildEnhancementSvg({
+      overlay: options.overlay ?? "",
+      productName: options.productName ?? "",
+      visualAngle: options.visualAngle ?? null,
+      sortOrder,
+    });
+    const enhanced = await sharp(base)
+      .composite([{ input: overlaySvg, top: 0, left: 0 }])
+      .png({ quality: 92, compressionLevel: 8 })
+      .toBuffer();
+    const up = await uploadBuffer(supabase, postId, sortOrder, enhanced, "image/png");
+    if (!up.url) return { ok: false, image_url: null, error: up.error ?? "Enhanced image upload failed." };
+    await supabase.from("post_creative_assets").insert({
+      generated_post_id: postId,
+      asset_type: "IMAGE",
+      source_type: "PRODUCT",
+      image_url: up.url,
+      prompt: null,
+      caption_overlay: shortText(options.overlay, "Anh san pham", 60),
+      sort_order: sortOrder,
+      status: "READY",
+      metadata: {
+        generated_from: options.generatedFrom ?? "SHOPEE_SOURCE_ENHANCED",
+        mock: false,
+        rehosted: true,
+        origin: src,
+        enhanced: true,
+        visual_angle: options.visualAngle ?? "",
+        ...(options.metadata ?? {}),
+      },
+    });
+    return { ok: true, image_url: up.url, error: null };
+  } catch (err) {
+    return {
+      ok: false,
+      image_url: null,
+      error: err instanceof Error ? err.message.slice(0, 200) : "Enhance source image failed.",
+    };
+  }
 }
 
 /**
