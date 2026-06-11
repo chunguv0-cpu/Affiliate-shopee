@@ -10,6 +10,7 @@
     "check:env": "tsx scripts/check-env.ts"
   },
   "dependencies": {
+    "@fontsource/noto-sans": "^5.2.10",
     "@supabase/supabase-js": "^2.108.0",
     "next": "^15.5.19",
     "openai": "^6.42.0",

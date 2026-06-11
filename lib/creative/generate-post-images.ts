@@ -1,5 +1,8 @@
 import "server-only";
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import OpenAI from "openai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -145,6 +148,12 @@ export async function generateImagePromptPackForPost(ctx: PostImageContext): Pro
 
 type UploadOutcome = { url: string | null; error: string | null };
 type ImageBufferOutcome = { buffer: Buffer | null; contentType: string; error: string | null };
+type EnhancedImageOptions = {
+  overlay?: string | null;
+  productName?: string | null;
+  visualAngle?: string | null;
+  sortOrder: number;
+};
 
 /** Upload buffer ảnh lên Supabase Storage, trả public URL + error đọc được. */
 async function uploadBuffer(
@@ -246,7 +255,23 @@ function xmlEscape(value: string): string {
 
 function shortText(value: string | null | undefined, fallback: string, max = 34): string {
   const clean = (value ?? "").replace(/\s+/g, " ").trim() || fallback;
-  return clean.length > max ? `${clean.slice(0, max - 1).trim()}…` : clean;
+  return clean.length > max ? `${clean.slice(0, max - 1).trim()}...` : clean;
+}
+
+function notoSansVietnameseFontData(): string {
+  try {
+    const fontPath = path.join(
+      process.cwd(),
+      "node_modules",
+      "@fontsource",
+      "noto-sans",
+      "files",
+      "noto-sans-vietnamese-700-normal.woff2",
+    );
+    return readFileSync(fontPath).toString("base64");
+  } catch {
+    return "";
+  }
 }
 
 function buildEnhancementSvg(input: {
@@ -256,13 +281,13 @@ function buildEnhancementSvg(input: {
   visualAngle?: string | null;
 }): Buffer {
   const palettes = [
-    { accent: "#ef4444", accent2: "#0f766e", dark: "#111827", soft: "#fff7ed" },
-    { accent: "#2563eb", accent2: "#f59e0b", dark: "#0f172a", soft: "#eff6ff" },
-    { accent: "#16a34a", accent2: "#7c3aed", dark: "#14532d", soft: "#f0fdf4" },
+    { accent: "#ef4444", dark: "#111827", soft: "#fff7ed" },
+    { accent: "#2563eb", dark: "#0f172a", soft: "#eff6ff" },
+    { accent: "#16a34a", dark: "#14532d", soft: "#f0fdf4" },
   ];
   const p = palettes[(input.sortOrder - 1) % palettes.length];
-  const overlay = xmlEscape(shortText(input.overlay, "Đáng xem hôm nay", 32));
-  const product = xmlEscape(shortText(input.productName, "Sản phẩm nổi bật", 42));
+  const overlay = xmlEscape(shortText(input.overlay, "Đáng xem hôm nay", 28));
+  const product = xmlEscape(shortText(input.productName, "Sản phẩm nổi bật", 34));
   const badge =
     input.visualAngle === "detail"
       ? "Chi tiết đáng chú ý"
@@ -271,11 +296,14 @@ function buildEnhancementSvg(input: {
         : input.visualAngle === "lifestyle"
           ? "Dễ dùng mỗi ngày"
           : "Gợi ý hôm nay";
-  const stickerA = input.sortOrder % 2 === 0 ? "Tiện lợi" : "Dễ chọn";
-  const stickerB = input.sortOrder % 3 === 0 ? "Nổi bật" : "Đáng mua";
+  const fontData = notoSansVietnameseFontData();
+  const fontFace = fontData
+    ? `@font-face{font-family:'NotoVN';src:url(data:font/woff2;base64,${fontData}) format('woff2');font-weight:700;}`
+    : "";
   const svg = `
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <style>${fontFace} .vn{font-family:'NotoVN','Arial','Helvetica',sans-serif;font-weight:700;}</style>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#111827" flood-opacity="0.22"/>
     </filter>
@@ -285,30 +313,41 @@ function buildEnhancementSvg(input: {
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="1024" height="1024" fill="none"/>
-  <rect x="0" y="650" width="1024" height="374" fill="url(#fade)"/>
+  <rect x="0" y="610" width="1024" height="414" fill="url(#fade)"/>
   <g filter="url(#shadow)">
-    <rect x="58" y="64" rx="26" ry="26" width="264" height="64" fill="${p.accent}"/>
-    <text x="190" y="104" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#ffffff">${xmlEscape(badge)}</text>
+    <rect x="56" y="62" rx="24" ry="24" width="332" height="66" fill="${p.accent}"/>
+    <text class="vn" x="222" y="105" text-anchor="middle" font-size="27" fill="#ffffff">${xmlEscape(badge)}</text>
   </g>
   <g filter="url(#shadow)">
-    <rect x="688" y="72" rx="30" ry="30" width="244" height="58" fill="${p.soft}" stroke="${p.accent2}" stroke-width="3"/>
-    <text x="810" y="109" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700" fill="${p.dark}">${xmlEscape(stickerA)}</text>
-  </g>
-  <g filter="url(#shadow)">
-    <circle cx="884" cy="204" r="62" fill="${p.accent2}"/>
-    <text x="884" y="197" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" fill="#ffffff">${xmlEscape(stickerB)}</text>
-    <text x="884" y="226" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#ffffff">+</text>
-  </g>
-  <g filter="url(#shadow)">
-    <rect x="58" y="748" rx="32" ry="32" width="908" height="188" fill="#ffffff" fill-opacity="0.94"/>
-    <rect x="58" y="748" rx="32" ry="32" width="14" height="188" fill="${p.accent}"/>
-    <text x="106" y="814" font-family="Arial, Helvetica, sans-serif" font-size="50" font-weight="800" fill="${p.dark}">${overlay}</text>
-    <text x="108" y="864" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="600" fill="#475569">${product}</text>
-    <rect x="108" y="892" rx="18" ry="18" width="178" height="42" fill="${p.accent}" fill-opacity="0.12"/>
-    <text x="197" y="921" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="${p.accent}">Xem chi tiết</text>
+    <rect x="54" y="748" rx="30" ry="30" width="916" height="164" fill="#ffffff" fill-opacity="0.96"/>
+    <rect x="54" y="748" rx="30" ry="30" width="16" height="164" fill="${p.accent}"/>
+    <text class="vn" x="104" y="822" font-size="48" fill="${p.dark}">${overlay}</text>
+    <text class="vn" x="106" y="870" font-size="25" fill="#475569">${product}</text>
   </g>
 </svg>`;
   return Buffer.from(svg);
+}
+
+async function enhanceImageBuffer(
+  buffer: Buffer,
+  options: EnhancedImageOptions,
+): Promise<Buffer> {
+  const sharp = (await import("sharp")).default;
+  const base = await sharp(buffer)
+    .rotate()
+    .resize(1024, 1024, { fit: "cover", position: "center", background: "#f8fafc" })
+    .png()
+    .toBuffer();
+  const overlaySvg = buildEnhancementSvg({
+    overlay: options.overlay ?? "",
+    productName: options.productName ?? "",
+    visualAngle: options.visualAngle ?? null,
+    sortOrder: options.sortOrder,
+  });
+  return sharp(base)
+    .composite([{ input: overlaySvg, top: 0, left: 0 }])
+    .png({ quality: 92, compressionLevel: 8 })
+    .toBuffer();
 }
 
 /** Prompt tối thiểu cho sinh ảnh (tương thích ImagePrompt & AiImagePrompt). */
@@ -531,25 +570,49 @@ export async function generateAndStoreImageAsset(
   sortOrder: number,
   prompt: MinimalPrompt,
 ): Promise<{ ok: boolean; mock: boolean; image_url: string | null; error: string | null }> {
-  // HOTFIX 17.4 — nếu có overlay text thì yêu cầu model render chữ lên ảnh (vùng an toàn).
+  // Keep AI images text-free, then render Vietnamese overlay ourselves for legibility.
   const overlay = (prompt.caption_overlay ?? "").trim();
-  const fullPrompt = overlay
-    ? `${prompt.prompt} IMPORTANT: render a SHORT Vietnamese caption text overlay reading exactly: "${overlay}". Place it in the top or bottom safe margin, clean modern social-media style, large legible sans-serif, high contrast, do NOT cover the product. Spell the Vietnamese text correctly.`
-    : prompt.prompt;
-  const r = await generateImageFromPrompt(fullPrompt);
+  const cleanPrompt = `${prompt.prompt} No text, no letters, no watermark, no captions, no UI, no badges.`;
+  const r = await generateImageFromPrompt(cleanPrompt);
   if (r.status !== "READY") {
     return { ok: false, mock: false, image_url: null, error: r.error ?? "Image generation failed." };
   }
   let imageUrl: string | null = null;
   let storageErr: string | null = null;
   if (r.b64) {
-    const up = await uploadImage(supabase, postId, sortOrder, r.b64);
+    let buffer: Buffer<ArrayBufferLike> = Buffer.from(r.b64, "base64");
+    if (overlay) {
+      buffer = await enhanceImageBuffer(buffer, {
+        overlay,
+        productName: "Sản phẩm nổi bật",
+        visualAngle: prompt.visual_angle ?? null,
+        sortOrder,
+      });
+    }
+    const up = await uploadBuffer(supabase, postId, sortOrder, buffer, "image/png");
     imageUrl = up.url;
     storageErr = up.error;
   } else if (r.url && !r.mock) {
-    const up = await uploadImageFromUrl(supabase, postId, sortOrder, r.url);
-    imageUrl = up.url ?? r.url;
-    if (!up.url) storageErr = up.error;
+    if (overlay) {
+      const fetched = await fetchImageBuffer(r.url);
+      if (fetched.buffer) {
+        const buffer = await enhanceImageBuffer(fetched.buffer, {
+          overlay,
+          productName: "Sản phẩm nổi bật",
+          visualAngle: prompt.visual_angle ?? null,
+          sortOrder,
+        });
+        const up = await uploadBuffer(supabase, postId, sortOrder, buffer, "image/png");
+        imageUrl = up.url;
+        storageErr = up.error;
+      } else {
+        storageErr = fetched.error;
+      }
+    } else {
+      const up = await uploadImageFromUrl(supabase, postId, sortOrder, r.url);
+      imageUrl = up.url ?? r.url;
+      if (!up.url) storageErr = up.error;
+    }
   } else if (r.url) {
     imageUrl = r.url; // mock placeholder
   }
