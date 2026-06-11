@@ -11,8 +11,8 @@ import {
 import { generateAndStoreImageAsset, storeSourceProductImage } from "@/lib/creative/generate-post-images";
 import { insertPostingLog } from "@/lib/posts/log";
 import { extractShopeeImagesWithBrowser, getShopeeImageSourceProvider } from "@/lib/shopee/browser-extract";
-import { isLikelyProductImage } from "@/lib/shopee/enrich";
-import { extractShopeeProductImages } from "@/lib/shopee/extract";
+import { isLikelyProductImage } from "@/lib/shopee/image-url";
+import { extractShopeeProductImages, toCanonicalShopeeProductUrl } from "@/lib/shopee/extract";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { AiJob, AiJobStatus, GeneratedPostStatus } from "@/lib/types";
 
@@ -50,7 +50,7 @@ const STEP_PROGRESS: Record<string, number> = {
 };
 
 const MISSING_SOURCE_MSG =
-  "Không lấy được ảnh sản phẩm từ link Shopee nên chưa thể tạo ảnh AI bám đúng sản phẩm.";
+  "Không lấy được ảnh sản phẩm tự động từ Shopee nên chưa thể tạo ảnh AI bám đúng sản phẩm.";
 
 export type RunStepResult = {
   ok: boolean;
@@ -165,6 +165,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
   try {
     const input = (job.input ?? {}) as {
       product_name?: string;
+      original_url?: string | null;
       affiliate_link?: string;
       target_customer?: string | null;
       product_angle?: string | null;
@@ -197,16 +198,17 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
     // ---------- SOURCE: lấy ảnh thật từ link Shopee (robust + diagnostics) ----------
     if (step === "SOURCE") {
       await insertPostingLog(supabase, postId, SHOPEE_FETCH_STARTED, "SUCCESS", "Bắt đầu lấy ảnh sản phẩm từ Shopee.", { ai_job_id: jobId });
-      const link = (input.affiliate_link ?? "").trim();
 
       // Strategy A: dùng ảnh đã lưu trên product nếu hợp lệ.
       let images: string[] = [];
       let diagnostics: unknown = null;
       let productUrl: string | null = null;
+      let productOriginalUrl: string | null = null;
+      let productAffiliateLink: string | null = null;
       if (job.related_product_id) {
         const { data: prod } = await supabase
           .from("products")
-          .select("image_url, source_product_images")
+          .select("image_url, source_product_images, original_url, affiliate_link")
           .eq("id", job.related_product_id)
           .single();
         const stored = Array.isArray(prod?.source_product_images)
@@ -214,31 +216,71 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           : [];
         if (stored.length > 0) images = stored;
         else if (typeof prod?.image_url === "string" && isLikelyProductImage(prod.image_url)) images = [prod.image_url];
+        productOriginalUrl = typeof prod?.original_url === "string" ? prod.original_url : null;
+        productAffiliateLink = typeof prod?.affiliate_link === "string" ? prod.affiliate_link : null;
       }
 
       // Strategy server_fetch (resolve + meta + api + html scan).
-      let finalUrl = link;
+      const sourceLinks = Array.from(
+        new Set(
+          [
+            productOriginalUrl,
+            input.original_url,
+            productAffiliateLink,
+            input.affiliate_link,
+          ]
+            .map((u) => (u ?? "").trim())
+            .filter((u) => u.length > 0),
+        ),
+      );
+      let finalUrl = sourceLinks[0] ?? "";
       if (images.length === 0) {
-        const ext = await extractShopeeProductImages(link);
-        diagnostics = ext.diagnostics;
-        finalUrl = ext.diagnostics.finalUrl ?? link;
-        productUrl = finalUrl;
-        images = ext.image_urls;
+        for (const sourceLink of sourceLinks) {
+          const ext = await extractShopeeProductImages(sourceLink);
+          diagnostics = ext.diagnostics;
+          finalUrl = ext.diagnostics.finalUrl ?? sourceLink;
+          productUrl = finalUrl;
+          if (ext.ok) {
+            images = ext.image_urls;
+            break;
+          }
+          const canonical = toCanonicalShopeeProductUrl(finalUrl);
+          if (canonical && canonical !== finalUrl) {
+            const canonicalExt = await extractShopeeProductImages(canonical);
+            diagnostics = {
+              ...canonicalExt.diagnostics,
+              previousAttempt: ext.diagnostics,
+            };
+            finalUrl = canonicalExt.diagnostics.finalUrl ?? canonical;
+            productUrl = finalUrl;
+            if (canonicalExt.ok) {
+              images = canonicalExt.image_urls;
+              break;
+            }
+          }
+        }
       }
 
       // Strategy B: browser-render-gallery (chỉ khi server fetch trống + provider browserless).
       let browserDiag: Record<string, unknown> | null = null;
       const provider = getShopeeImageSourceProvider();
       if (images.length === 0 && provider === "browserless") {
-        const b = await extractShopeeImagesWithBrowser(finalUrl);
-        browserDiag = {
-          browserExtractionTried: true,
-          browserExtractionStatus: b.status,
-          browserExtractionError: b.error,
-          sourceStrategy: b.ok ? "browser-render-gallery" : undefined,
-          ...b.diagnostics,
-        };
-        if (b.ok) images = b.image_urls;
+        const browserUrls = Array.from(new Set([toCanonicalShopeeProductUrl(finalUrl), finalUrl].filter((u): u is string => !!u)));
+        for (const browserUrl of browserUrls) {
+          const b = await extractShopeeImagesWithBrowser(browserUrl);
+          browserDiag = {
+            browserExtractionTried: true,
+            browserExtractionUrl: browserUrl,
+            browserExtractionStatus: b.status,
+            browserExtractionError: b.error,
+            sourceStrategy: b.ok ? "browser-render-gallery" : undefined,
+            ...b.diagnostics,
+          };
+          if (b.ok) {
+            images = b.image_urls;
+            break;
+          }
+        }
       }
 
       // Lưu ảnh nguồn vào product nếu có.
@@ -252,6 +294,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       const combinedDiag = {
         ...(diagnostics && typeof diagnostics === "object" ? (diagnostics as Record<string, unknown>) : {}),
         imageSourceProvider: provider,
+        sourceLinkCandidates: sourceLinks.length,
         browserExtractionTried: browserDiag !== null,
         ...(browserDiag ?? {}),
         firstValidImages: images.slice(0, 5),
@@ -264,7 +307,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         await insertPostingLog(supabase, postId, SHOPEE_FETCH_FAILED, "FAILED", "Không lấy được ảnh sản phẩm thật.", { ai_job_id: jobId });
         await insertPostingLog(supabase, postId, GROUNDING_MISSING, "FAILED", MISSING_SOURCE_MSG, { ai_job_id: jobId });
         return failHard(
-          "Chưa có ảnh nguồn sản phẩm. Hãy dùng nút 'Capture ảnh từ Shopee' (trang Sản phẩm) trên trình duyệt của bạn, sau đó tạo lại bài.",
+          "Chưa lấy được ảnh nguồn sản phẩm tự động. Hãy kiểm tra Browserless proxy/9proxy hoặc bổ sung original_url sạch rồi tạo lại bài.",
           postId,
           "MISSING_PRODUCT_IMAGE",
         );

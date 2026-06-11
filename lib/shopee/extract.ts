@@ -105,6 +105,13 @@ export function parseShopeeIds(url: string): { shopId: string | null; itemId: st
   return { shopId: null, itemId: null };
 }
 
+/** URL sản phẩm sạch, bỏ affiliate/mobile/tracking params để giảm khả năng bị traffic verify. */
+export function toCanonicalShopeeProductUrl(url: string): string | null {
+  const { shopId, itemId } = parseShopeeIds(url);
+  if (!shopId || !itemId) return null;
+  return `https://shopee.vn/product/${shopId}/${itemId}`;
+}
+
 /**
  * Strategy item-metadata-by-ids: gọi API item công khai của Shopee (không cookie/login).
  * Có thể bị chặn -> trả null, ghi diagnostic, tiếp tục.

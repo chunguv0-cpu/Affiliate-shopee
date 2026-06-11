@@ -1,5 +1,7 @@
 import "server-only";
 
+import { isLikelyProductImage, normalizeImageUrl } from "@/lib/shopee/image-url";
+
 /**
  * HOTFIX 17.6 / 17.6.1 — Browser-render extractor cho ảnh sản phẩm Shopee.
  * Remote Chromium (Browserless) qua puppeteer-core CONNECT. KHÔNG cookie/login.
@@ -17,37 +19,124 @@ export function isBrowserExtractConfigured(): boolean {
   return getShopeeImageSourceProvider() === "browserless" && !!process.env.BROWSERLESS_WS_ENDPOINT?.trim();
 }
 
+type ProxyConfig = {
+  mode: "external" | "chrome_arg";
+  browserlessProxy: string | null;
+  browserlessProxyCountry: string | null;
+  browserlessProxySticky: string | null;
+  browserlessProxyLocaleMatch: string | null;
+  externalProxyServer: string | null;
+  chromeProxyServer: string | null;
+  username: string | null;
+  password: string | null;
+};
+
+function appendParam(url: string, key: string, value: string): string {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+}
+
+function parseExternalProxyServer(raw: string | null): {
+  externalProxyServer: string | null;
+  chromeProxyServer: string | null;
+  username: string | null;
+  password: string | null;
+} {
+  const value = raw?.trim();
+  if (!value) {
+    return { externalProxyServer: null, chromeProxyServer: null, username: null, password: null };
+  }
+
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const parsed = new URL(value);
+      const username = parsed.username ? decodeURIComponent(parsed.username) : null;
+      const password = parsed.password ? decodeURIComponent(parsed.password) : null;
+      parsed.username = "";
+      parsed.password = "";
+      const chromeProxyServer = parsed.toString().replace(/\/$/, "");
+      return { externalProxyServer: value, chromeProxyServer, username, password };
+    } catch {
+      return { externalProxyServer: value, chromeProxyServer: value, username: null, password: null };
+    }
+  }
+
+  const parts = value.split(":");
+  if (parts.length >= 4 && /^\d+$/.test(parts[1])) {
+    const [host, port, username, ...passwordParts] = parts;
+    const password = passwordParts.join(":");
+    return {
+      externalProxyServer: `http://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`,
+      chromeProxyServer: `http://${host}:${port}`,
+      username,
+      password,
+    };
+  }
+
+  if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+    return { externalProxyServer: `http://${value}`, chromeProxyServer: `http://${value}`, username: null, password: null };
+  }
+
+  return { externalProxyServer: value, chromeProxyServer: value, username: null, password: null };
+}
+
+function readProxyConfig(): ProxyConfig {
+  const rawMode = process.env.BROWSERLESS_PROXY_MODE?.trim().toLowerCase();
+  const mode: ProxyConfig["mode"] = rawMode === "chrome_arg" ? "chrome_arg" : "external";
+  const browserlessProxy = process.env.BROWSERLESS_PROXY?.trim() || null;
+  const browserlessProxyCountry = process.env.BROWSERLESS_PROXY_COUNTRY?.trim() || null;
+  const browserlessProxySticky = process.env.BROWSERLESS_PROXY_STICKY?.trim() || null;
+  const browserlessProxyLocaleMatch = process.env.BROWSERLESS_PROXY_LOCALE_MATCH?.trim() || null;
+  const rawCustomProxy = process.env.BROWSERLESS_PROXY_URL?.trim() || null;
+  const parsed = parseExternalProxyServer(rawCustomProxy);
+
+  return {
+    mode,
+    browserlessProxy,
+    browserlessProxyCountry,
+    browserlessProxySticky,
+    browserlessProxyLocaleMatch,
+    ...parsed,
+  };
+}
+
 function buildWsEndpoint(): string | null {
-  const ep = process.env.BROWSERLESS_WS_ENDPOINT?.trim();
+  let ep = process.env.BROWSERLESS_WS_ENDPOINT?.trim();
   if (!ep) return null;
   const token = process.env.BROWSERLESS_API_TOKEN?.trim();
-  if (token && !/[?&]token=/.test(ep)) return ep.includes("?") ? `${ep}&token=${token}` : `${ep}?token=${token}`;
+  if (token && !/[?&]token=/.test(ep)) ep = appendParam(ep, "token", token);
+
+  const stealth = process.env.BROWSERLESS_STEALTH?.trim() || "true";
+  if (stealth && !/[?&]stealth=/.test(ep)) ep = appendParam(ep, "stealth", stealth);
+
+  const timeout = process.env.BROWSERLESS_TIMEOUT_MS?.trim() || "60000";
+  if (timeout && !/[?&]timeout=/.test(ep)) ep = appendParam(ep, "timeout", timeout);
+
+  const proxy = readProxyConfig();
+  if (proxy.browserlessProxy && !/[?&]proxy=/.test(ep)) ep = appendParam(ep, "proxy", proxy.browserlessProxy);
+  if (proxy.browserlessProxyCountry && !/[?&]proxyCountry=/.test(ep)) {
+    ep = appendParam(ep, "proxyCountry", proxy.browserlessProxyCountry);
+  }
+  if (proxy.browserlessProxySticky && !/[?&]proxySticky=/.test(ep)) {
+    ep = appendParam(ep, "proxySticky", proxy.browserlessProxySticky);
+  }
+  if (proxy.browserlessProxyLocaleMatch && !/[?&]proxyLocaleMatch=/.test(ep)) {
+    ep = appendParam(ep, "proxyLocaleMatch", proxy.browserlessProxyLocaleMatch);
+  }
+  if (proxy.externalProxyServer && proxy.mode === "external" && !/[?&]externalProxyServer=/.test(ep)) {
+    ep = appendParam(ep, "externalProxyServer", proxy.externalProxyServer);
+  }
+  if (proxy.chromeProxyServer && proxy.mode === "chrome_arg" && !/[?&]--proxy-server=/.test(ep)) {
+    ep = appendParam(ep, "--proxy-server", proxy.chromeProxyServer);
+  }
+
   return ep;
 }
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
-const NON_PRODUCT_RE =
-  /(logo|favicon|sprite|placeholder|default|avatar|banner|qr[-_]?code|app[-_]?icon|appstore|googleplay|deo\.shopeemobile|\/web\/|icon[-_.]|\.svg|shopee[-_]?bag|tracking|pixel|1x1)/i;
 const SHOPEE_CDN_RE = /(susercontent\.com|cf\.shopee\.vn|img\.susercontent\.com)/i;
-
-/** Chuẩn hóa URL ảnh Shopee. */
-export function normalizeShopeeImageUrl(u: string): string {
-  let s = (u ?? "").trim();
-  s = s.replace(/\\u002[fF]/g, "/").replace(/\\\//g, "/").replace(/&amp;/g, "&");
-  if (s.startsWith("//")) s = "https:" + s;
-  return s;
-}
-
-/** Hợp lệ nếu là ảnh CDN Shopee (kể cả không có đuôi file) và KHÔNG phải logo/icon. */
-function isValidShopeeImage(url: string): boolean {
-  const u = (url ?? "").trim();
-  if (!/^https?:\/\//i.test(u)) return false;
-  if (NON_PRODUCT_RE.test(u)) return false;
-  if (SHOPEE_CDN_RE.test(u)) return true;
-  return /\.(?:jpg|jpeg|png|webp)(?:$|[?#])/i.test(u);
-}
 
 export type BrowserExtractResult = {
   ok: boolean;
@@ -73,10 +162,14 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let browser: any = null;
   try {
+    const proxy = readProxyConfig();
     const mod = (await import("puppeteer-core")) as unknown as { default: { connect: (o: { browserWSEndpoint: string }) => Promise<unknown> } };
     browser = await mod.default.connect({ browserWSEndpoint: wsEndpoint });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const page: any = await browser.newPage();
+    if (proxy.mode === "chrome_arg" && proxy.username && proxy.password && typeof page.authenticate === "function") {
+      await page.authenticate({ username: proxy.username, password: proxy.password });
+    }
     await page.setUserAgent(UA);
     try {
       await page.setExtraHTTPHeaders({ "Accept-Language": "vi-VN,vi;q=0.9" });
@@ -91,7 +184,7 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
       try {
         const u = res.url();
         const ct = (res.headers()?.["content-type"] ?? "").toLowerCase();
-        if (SHOPEE_CDN_RE.test(u) && (ct.includes("image") || isValidShopeeImage(u))) networkImages.add(u);
+        if (SHOPEE_CDN_RE.test(u) && (ct.includes("image") || isLikelyProductImage(u))) networkImages.add(u);
       } catch {
         /* ignore */
       }
@@ -149,12 +242,12 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
       /* ignore */
     }
 
-    const rawCandidates = Array.from(new Set([...dom.urls, ...Array.from(networkImages)].map(normalizeShopeeImageUrl).filter(Boolean)));
+    const rawCandidates = Array.from(new Set([...dom.urls, ...Array.from(networkImages)].map(normalizeImageUrl).filter(Boolean)));
     const valid: string[] = [];
     const rejected: Array<{ url: string; reason: string }> = [];
     for (const c of rawCandidates) {
-      if (isValidShopeeImage(c)) valid.push(c);
-      else if (rejected.length < 10) rejected.push({ url: c.slice(0, 180), reason: NON_PRODUCT_RE.test(c) ? "logo/icon/non-product" : "không phải CDN Shopee / không có đuôi ảnh" });
+      if (isLikelyProductImage(c)) valid.push(c);
+      else if (rejected.length < 10) rejected.push({ url: c.slice(0, 180), reason: "logo/icon/non-product hoặc không phải ảnh sản phẩm" });
     }
     // Ưu tiên ảnh CDN /file/ rồi tới CDN khác.
     valid.sort((a, b) => (/\/file\//i.test(b) ? 1 : 0) - (/\/file\//i.test(a) ? 1 : 0));
@@ -162,6 +255,13 @@ export async function extractShopeeImagesWithBrowser(url: string): Promise<Brows
 
     diagnostics.browserFinalUrl = finalUrl;
     diagnostics.browserPageTitle = pageTitle;
+    diagnostics.browserlessProxyEnabled = Boolean(proxy.browserlessProxy || proxy.externalProxyServer);
+    diagnostics.browserlessProxyMode = proxy.browserlessProxy ? "browserless" : proxy.externalProxyServer ? proxy.mode : "none";
+    diagnostics.browserlessProxyCountry = proxy.browserlessProxyCountry ?? null;
+    diagnostics.browserlessProxySticky = proxy.browserlessProxySticky ?? null;
+    diagnostics.browserlessProxyLocaleMatch = proxy.browserlessProxyLocaleMatch ?? null;
+    diagnostics.browserlessExternalProxyConfigured = Boolean(proxy.externalProxyServer);
+    diagnostics.browserlessProxyAuth = Boolean(proxy.username && proxy.password);
     diagnostics.browserImgTagCount = dom.imgCount;
     diagnostics.browserBackgroundImageCount = dom.bgCount;
     diagnostics.browserNetworkImageCount = networkImages.size;

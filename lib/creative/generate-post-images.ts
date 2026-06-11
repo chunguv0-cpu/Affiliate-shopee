@@ -349,16 +349,26 @@ export async function materializeImages(
   }
 
   // 4) Lưu (regenerate-safe: xóa pack cũ trước).
+  let persistError: string | null = null;
   try {
-    await supabase.from("post_creative_assets").delete().eq("generated_post_id", postId);
-    if (rows.length > 0) await supabase.from("post_creative_assets").insert(rows);
-  } catch {
-    /* bỏ qua lỗi lưu */
+    const { error: deleteError } = await supabase.from("post_creative_assets").delete().eq("generated_post_id", postId);
+    if (deleteError) throw deleteError;
+    if (rows.length > 0) {
+      const { error: insertError } = await supabase.from("post_creative_assets").insert(rows);
+      if (insertError) throw insertError;
+    }
+  } catch (err) {
+    persistError = err instanceof Error ? err.message.slice(0, 200) : "Could not save image assets.";
+    errorMessages.push(`Không lưu được asset ảnh: ${persistError}`);
+    await insertPostingLog(supabase, postId, STORAGE_UPLOAD_FAILED, "FAILED", `Không lưu được asset ảnh: ${persistError}`, {
+      generated_post_id: postId,
+    });
   }
 
   // 5) Tính trạng thái — CHỈ ảnh thật (không mock) mới tính publish-ready.
-  const realReady = rows.filter((r) => r.status === "READY" && r.image_url && r.metadata.mock !== true).length;
-  const anyReady = rows.filter((r) => r.status === "READY" && r.image_url).length;
+  const savedRows = persistError ? [] : rows;
+  const realReady = savedRows.filter((r) => r.status === "READY" && r.image_url && r.metadata.mock !== true).length;
+  const anyReady = savedRows.filter((r) => r.status === "READY" && r.image_url).length;
 
   const firstErr = errorMessages.find(Boolean) ?? null;
   let status: CreativePackStatus;

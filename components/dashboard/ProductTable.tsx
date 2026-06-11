@@ -10,6 +10,7 @@ import ProductForm from "@/components/dashboard/ProductForm";
 import ProductStatusBadge from "@/components/dashboard/ProductStatusBadge";
 import { deleteProduct } from "@/app/dashboard/products/actions";
 import { LINK_STATUS_LABELS, type LinkStatus, type Product } from "@/lib/types";
+import { hasValidProductImage } from "@/lib/shopee/image-url";
 
 type LinkFilter = "ALL" | LinkStatus;
 
@@ -180,7 +181,7 @@ export default function ProductTable({
                         affiliateLink={p.affiliate_link}
                         captureSecret={captureSecret}
                         appUrl={appUrl}
-                        captured={Array.isArray(p.source_product_images) && p.source_product_images.length > 0}
+                        captured={hasValidProductImage(p.source_product_images, p.image_url)}
                       />
                       <GeneratePostButton productId={p.id} />
                     </div>

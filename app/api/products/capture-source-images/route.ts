@@ -1,13 +1,10 @@
 import { NextResponse } from "next/server";
 
+import { isLikelyProductImage, normalizeImageUrl } from "@/lib/shopee/image-url";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const NON_PRODUCT_RE =
-  /(logo|favicon|sprite|placeholder|default|avatar|banner|qr[-_]?code|app[-_]?icon|appstore|googleplay|deo\.shopeemobile|\/web\/|icon[-_.]|\.svg|shopee[-_]?bag|tracking|pixel|1x1)/i;
-const SHOPEE_CDN_RE = /(susercontent\.com|cf\.shopee\.vn|img\.susercontent\.com)/i;
 
 function corsHeaders(): Record<string, string> {
   return {
@@ -19,21 +16,6 @@ function corsHeaders(): Record<string, string> {
 
 function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: corsHeaders() });
-}
-
-function normalize(u: string): string {
-  let s = (u ?? "").trim();
-  s = s.replace(/\\u002[fF]/g, "/").replace(/\\\//g, "/").replace(/&amp;/g, "&");
-  if (s.startsWith("//")) s = "https:" + s;
-  return s;
-}
-
-function isValidImage(url: string): boolean {
-  const u = (url ?? "").trim();
-  if (!/^https?:\/\//i.test(u)) return false;
-  if (NON_PRODUCT_RE.test(u)) return false;
-  if (SHOPEE_CDN_RE.test(u)) return true;
-  return /\.(?:jpg|jpeg|png|webp)(?:$|[?#])/i.test(u);
 }
 
 export async function OPTIONS() {
@@ -73,7 +55,7 @@ export async function POST(request: Request) {
 
   const rawImages = Array.isArray(payload.images) ? (payload.images as unknown[]) : [];
   const valid = Array.from(
-    new Set(rawImages.filter((x): x is string => typeof x === "string").map(normalize).filter(isValidImage)),
+    new Set(rawImages.filter((x): x is string => typeof x === "string").map(normalizeImageUrl).filter(isLikelyProductImage)),
   ).slice(0, 8);
 
   if (valid.length === 0) {

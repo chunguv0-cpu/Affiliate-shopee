@@ -71,6 +71,17 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
               <div className="sm:col-span-2">Chiến lược đã thử: <span className="text-gray-800">{strategies.join(", ") || "—"}</span></div>
               <div>Image provider: <span className="text-gray-800">{String(d.imageSourceProvider ?? "server_fetch")}</span></div>
               <div>Browser render: <span className="text-gray-800">{d.browserExtractionTried ? `${String(d.browserExtractionStatus ?? "?")} (hợp lệ: ${String(d.browserValidImagesCount ?? 0)})` : "chưa thử"}</span></div>
+              {d.browserFinalUrl ? (
+                <div className="sm:col-span-2">Browser final URL: <span className="break-all text-gray-800">{String(d.browserFinalUrl)}</span></div>
+              ) : null}
+              {d.browserlessProxyEnabled !== undefined ? (
+                <>
+                  <div>Proxy: <span className="text-gray-800">{d.browserlessProxyEnabled ? "đang bật" : "chưa bật"}</span></div>
+                  <div>Proxy mode: <span className="text-gray-800">{String(d.browserlessProxyMode ?? "—")}</span></div>
+                  <div>External proxy: <span className="text-gray-800">{d.browserlessExternalProxyConfigured ? "có cấu hình" : "không"}</span></div>
+                  <div>Proxy auth: <span className="text-gray-800">{d.browserlessProxyAuth ? "có" : "không"}</span></div>
+                </>
+              ) : null}
             </dl>
             {showFull && rejected.length > 0 ? (
               <div className="mt-2">
@@ -85,10 +96,10 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
             {showFull ? (
               <div className="mt-2 space-y-1 text-xs text-amber-700">
                 <p>
-                  Server không lấy được ảnh Shopee. Hãy mở sản phẩm trên trình duyệt và dùng nút{" "}
-                  <Link href="/dashboard/products" className="font-medium underline">Capture ảnh từ Shopee (trang Sản phẩm)</Link>, rồi tạo lại bài.
+                  Server không lấy được ảnh Shopee tự động. Nếu Browser final URL là <code>/verify/traffic/error</code>,
+                  Shopee vẫn đang chặn phiên Browserless/proxy.
                 </p>
-                <p>Không nên tạo ảnh AI mù nếu chưa có ảnh nguồn sản phẩm.</p>
+                <p>Hãy kiểm tra 9proxy, thử đổi proxy sticky IP, hoặc đặt <code>BROWSERLESS_PROXY_MODE=chrome_arg</code> rồi redeploy.</p>
               </div>
             ) : null}
           </div>

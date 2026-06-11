@@ -21,13 +21,20 @@ export async function createAiPostImageJob(productId: string): Promise<CreateJob
     const supabase = createSupabaseAdminClient();
     const { data: product, error: prodErr } = await supabase
       .from("products")
-      .select("id, product_name, affiliate_link, target_customer, product_angle, price_note, link_status")
+      .select("id, product_name, original_url, affiliate_link, target_customer, product_angle, price_note, link_status")
       .eq("id", productId)
       .single();
     if (prodErr || !product) return { ok: false, error: "Không tìm thấy sản phẩm." };
     const p = product as Pick<
       Product,
-      "id" | "product_name" | "affiliate_link" | "target_customer" | "product_angle" | "price_note" | "link_status"
+      | "id"
+      | "product_name"
+      | "original_url"
+      | "affiliate_link"
+      | "target_customer"
+      | "product_angle"
+      | "price_note"
+      | "link_status"
     >;
     if (p.link_status !== "READY" || !p.affiliate_link) {
       return { ok: false, error: "Sản phẩm chưa có link Affiliate hợp lệ. Vui lòng chuyển link trước." };
@@ -44,6 +51,7 @@ export async function createAiPostImageJob(productId: string): Promise<CreateJob
         related_product_id: p.id,
         input: {
           product_name: p.product_name,
+          original_url: p.original_url,
           affiliate_link: p.affiliate_link,
           target_customer: p.target_customer,
           product_angle: p.product_angle,

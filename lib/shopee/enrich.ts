@@ -1,6 +1,9 @@
 import "server-only";
 
 import { getAllowedShopeeHost } from "@/lib/affiliate";
+import { isLikelyProductImage } from "@/lib/shopee/image-url";
+
+export { isLikelyProductImage } from "@/lib/shopee/image-url";
 
 /**
  * Enrich link affiliate Shopee bằng metadata công khai (Open Graph / <title>).
@@ -81,20 +84,6 @@ function shopeeCdnImages(html: string): string[] {
     if (out.length > 30) break;
   }
   return out;
-}
-
-// HOTFIX 17.4 — loại ảnh KHÔNG phải ảnh sản phẩm (logo/icon/favicon/placeholder...).
-const NON_PRODUCT_PATTERNS =
-  /(logo|favicon|sprite|placeholder|default|avatar|banner|qr[-_]?code|app[-_]?icon|appstore|googleplay|deo\.shopeemobile|\/web\/|icon[-_.]|\.svg)/i;
-
-/** Ảnh được coi là ảnh sản phẩm thật nếu: trên CDN susercontent /file/ HOẶC có đuôi ảnh, và KHÔNG khớp mẫu logo/icon. */
-export function isLikelyProductImage(url: string): boolean {
-  const u = (url ?? "").trim();
-  if (!/^https?:\/\//i.test(u)) return false;
-  if (NON_PRODUCT_PATTERNS.test(u)) return false;
-  const isShopeeCdnFile = /susercontent\.com\/file\//i.test(u);
-  const hasImageExt = /\.(?:jpg|jpeg|png|webp)(?:$|[?#])/i.test(u);
-  return isShopeeCdnFile || hasImageExt;
 }
 
 /** Sắp xếp ưu tiên ảnh sản phẩm Shopee CDN /file/ lên trước. */
