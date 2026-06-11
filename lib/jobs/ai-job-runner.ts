@@ -10,7 +10,8 @@ import {
 } from "@/lib/ai/client";
 import { generateAndStoreImageAsset, storeSourceProductImage } from "@/lib/creative/generate-post-images";
 import { insertPostingLog } from "@/lib/posts/log";
-import { extractShopeeProductData } from "@/lib/shopee/enrich";
+import { isLikelyProductImage } from "@/lib/shopee/enrich";
+import { extractShopeeProductImages } from "@/lib/shopee/extract";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { AiJob, AiJobStatus, GeneratedPostStatus } from "@/lib/types";
 
@@ -192,33 +193,61 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
     const postId = job.related_post_id;
     if (!postId) return failStep("Thiếu related_post_id (chưa qua INIT).");
 
-    // ---------- SOURCE: lấy ảnh thật từ link Shopee ----------
+    // ---------- SOURCE: lấy ảnh thật từ link Shopee (robust + diagnostics) ----------
     if (step === "SOURCE") {
       await insertPostingLog(supabase, postId, SHOPEE_FETCH_STARTED, "SUCCESS", "Bắt đầu lấy ảnh sản phẩm từ Shopee.", { ai_job_id: jobId });
       const link = (input.affiliate_link ?? "").trim();
-      const data2 = await extractShopeeProductData(link);
-      if (!data2.ok || data2.image_urls.length === 0) {
-        await insertPostingLog(supabase, postId, SHOPEE_FETCH_FAILED, "FAILED", data2.error ?? "Không có ảnh.", { ai_job_id: jobId });
-        await insertPostingLog(supabase, postId, GROUNDING_MISSING, "FAILED", MISSING_SOURCE_MSG, { ai_job_id: jobId });
-        // Không retry vô ích nhiều lần với link bị chặn -> fail hẳn với trạng thái thiếu ảnh nguồn.
-        return failHard(MISSING_SOURCE_MSG, postId, "MISSING_PRODUCT_IMAGE");
-      }
-      // Lưu ảnh nguồn vào product.
+
+      // Strategy A: dùng ảnh đã lưu trên product nếu hợp lệ.
+      let images: string[] = [];
+      let diagnostics: unknown = null;
+      let productUrl: string | null = null;
       if (job.related_product_id) {
-        await supabase
+        const { data: prod } = await supabase
           .from("products")
-          .update({ source_product_images: data2.image_urls, updated_at: nowIso() })
-          .eq("id", job.related_product_id);
+          .select("image_url, source_product_images")
+          .eq("id", job.related_product_id)
+          .single();
+        const stored = Array.isArray(prod?.source_product_images)
+          ? (prod!.source_product_images as unknown[]).filter((u): u is string => typeof u === "string" && isLikelyProductImage(u))
+          : [];
+        if (stored.length > 0) images = stored;
+        else if (typeof prod?.image_url === "string" && isLikelyProductImage(prod.image_url)) images = [prod.image_url];
       }
-      // Thêm 1 ảnh thật làm asset PRODUCT (sort 1).
-      const stored = await storeSourceProductImage(supabase, postId, 1, data2.image_urls[0]);
+
+      // Strategy B-E: trích từ trang Shopee nếu chưa có.
+      if (images.length === 0) {
+        const ext = await extractShopeeProductImages(link);
+        diagnostics = ext.diagnostics;
+        productUrl = ext.diagnostics.finalUrl ?? null;
+        images = ext.image_urls;
+        if (images.length > 0 && job.related_product_id) {
+          await supabase
+            .from("products")
+            .update({ source_product_images: images, image_url: images[0], updated_at: nowIso() })
+            .eq("id", job.related_product_id);
+        }
+      }
+
+      const baseOutput = { ...((job.output as object) ?? {}), source_images: images, source_diagnostics: diagnostics, product_url: productUrl };
+      // Luôn ghi diagnostics vào output để UI xem được khi fail.
+      await supabase.from("ai_jobs").update({ output: baseOutput, updated_at: nowIso() }).eq("id", jobId);
+
+      if (images.length === 0) {
+        await insertPostingLog(supabase, postId, SHOPEE_FETCH_FAILED, "FAILED", "Không lấy được ảnh sản phẩm thật.", { ai_job_id: jobId });
+        await insertPostingLog(supabase, postId, GROUNDING_MISSING, "FAILED", MISSING_SOURCE_MSG, { ai_job_id: jobId });
+        return failHard(
+          "Không lấy được ảnh sản phẩm thật từ Shopee. Có thể Shopee chặn server fetch hoặc link cần render bằng trình duyệt.",
+          postId,
+          "MISSING_PRODUCT_IMAGE",
+        );
+      }
+
+      const stored = await storeSourceProductImage(supabase, postId, 1, images[0]);
       if (!stored.ok) return failStep(stored.error ?? "Lưu ảnh nguồn thất bại.");
-      await insertPostingLog(supabase, postId, SHOPEE_FETCH_SUCCESS, "SUCCESS", `Lấy ${data2.image_urls.length} ảnh sản phẩm Shopee.`, { ai_job_id: jobId });
+      await insertPostingLog(supabase, postId, SHOPEE_FETCH_SUCCESS, "SUCCESS", `Lấy ${images.length} ảnh sản phẩm Shopee.`, { ai_job_id: jobId });
       await insertPostingLog(supabase, postId, GROUNDING_READY, "SUCCESS", "Đã có ảnh nguồn để grounding.", { ai_job_id: jobId });
-      return advance("VISION", {
-        attempts: 0,
-        output: { ...((job.output as object) ?? {}), source_images: data2.image_urls, product_url: data2.product_url, description: data2.description },
-      });
+      return advance("VISION", { attempts: 0, output: baseOutput });
     }
 
     // ---------- VISION: tóm tắt nhận diện thị giác ----------

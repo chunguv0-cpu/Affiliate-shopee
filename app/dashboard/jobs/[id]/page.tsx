@@ -50,6 +50,44 @@ export default async function AiJobPage({ params }: { params: Promise<{ id: stri
         </div>
       ) : null}
 
+      {(() => {
+        const out = job.output && typeof job.output === "object" ? (job.output as Record<string, unknown>) : {};
+        const d = out.source_diagnostics && typeof out.source_diagnostics === "object" ? (out.source_diagnostics as Record<string, unknown>) : null;
+        if (!d) return null;
+        const rejected = Array.isArray(d.rejectedImages) ? (d.rejectedImages as Array<{ url: string; reason: string }>) : [];
+        const strategies = Array.isArray(d.strategiesTried) ? (d.strategiesTried as string[]) : [];
+        const showFull = (d.validImagesCount as number) === 0 || job.status === "FAILED";
+        return (
+          <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 text-sm">
+            <h3 className="mb-2 text-base font-semibold text-gray-900">Chẩn đoán lấy ảnh Shopee</h3>
+            <dl className="grid grid-cols-1 gap-1 text-xs text-gray-600 sm:grid-cols-2">
+              <div>Link gốc: <span className="break-all text-gray-800">{String(d.originalUrl ?? "—")}</span></div>
+              <div>Link resolve: <span className="break-all text-gray-800">{String(d.finalUrl ?? d.resolvedUrl ?? "—")}</span></div>
+              <div>HTTP: <span className="text-gray-800">{String(d.httpStatus ?? "—")}</span></div>
+              <div>HTML length: <span className="text-gray-800">{String(d.htmlLength ?? 0)}</span></div>
+              <div>shopId/itemId: <span className="text-gray-800">{String(d.detectedShopId ?? "—")} / {String(d.detectedItemId ?? "—")}</span></div>
+              <div>Ảnh ứng viên: <span className="text-gray-800">{String(d.imageCandidatesCount ?? 0)}</span> · Hợp lệ: <span className="text-gray-800">{String(d.validImagesCount ?? 0)}</span></div>
+              <div className="sm:col-span-2">Chiến lược đã thử: <span className="text-gray-800">{strategies.join(", ") || "—"}</span></div>
+            </dl>
+            {showFull && rejected.length > 0 ? (
+              <div className="mt-2">
+                <p className="text-xs font-medium text-gray-500">Ảnh bị loại ({rejected.length}):</p>
+                <ul className="mt-1 max-h-32 space-y-0.5 overflow-auto text-[11px] text-gray-500">
+                  {rejected.slice(0, 8).map((r, i) => (
+                    <li key={i} className="break-all">• {r.url} — {r.reason}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {showFull ? (
+              <p className="mt-2 text-xs text-amber-700">
+                Gợi ý: Thử mở link trực tiếp, kiểm tra link affiliate đã resolve đúng sản phẩm, hoặc import lại link. Shopee có thể chặn server fetch.
+              </p>
+            ) : null}
+          </div>
+        );
+      })()}
+
       {job.related_post_id ? (
         <p className="mt-4 text-sm text-gray-500">
           Bài liên quan:{" "}

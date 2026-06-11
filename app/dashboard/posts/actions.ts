@@ -18,7 +18,7 @@ import {
   storeSourceProductImage,
 } from "@/lib/creative/generate-post-images";
 import { buildCreativeFields } from "@/lib/posts/creative";
-import { extractShopeeProductData } from "@/lib/shopee/enrich";
+import { extractShopeeProductImages } from "@/lib/shopee/extract";
 
 const MISSING_SOURCE_MSG =
   "Không lấy được ảnh sản phẩm từ link Shopee nên chưa thể tạo ảnh AI bám đúng sản phẩm.";
@@ -295,7 +295,7 @@ export async function regeneratePostCreativeAssets(postId: string): Promise<Rege
       ? (product!.source_product_images as unknown[]).filter((u): u is string => typeof u === "string" && /^https?:\/\//i.test(u))
       : [];
     if (sources.length === 0 && product?.affiliate_link) {
-      const ex = await extractShopeeProductData(product.affiliate_link);
+      const ex = await extractShopeeProductImages(product.affiliate_link);
       if (ex.ok) sources = ex.image_urls;
     }
     if (sources.length === 0) {
