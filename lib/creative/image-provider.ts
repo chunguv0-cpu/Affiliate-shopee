@@ -42,12 +42,45 @@ export function getImageProvider(): ImageProvider {
 /** Kết quả sinh 1 ảnh từ prompt cụ thể (Phase 17 — fully AI). */
 export type PromptImageResult = {
   b64: string | null; // ảnh thật (base64 png) -> upload storage
-  url: string | null; // chỉ dùng cho mock (placeholder)
+  url: string | null; // mock placeholder hoặc URL ảnh thật từ provider
   mock: boolean;
   provider: ImageProvider;
   model: string | null;
   status: "READY" | "FAILED";
+  error?: string | null;
 };
+
+/** Chẩn đoán cấu hình provider ảnh (an toàn — KHÔNG lộ API key). */
+export type ImageProviderConfig = {
+  provider: ImageProvider;
+  hasV98Key: boolean;
+  v98BaseUrl: string | null;
+  imageModel: string | null;
+  isConfigured: boolean;
+  errors: string[];
+};
+
+export function getImageProviderConfig(): ImageProviderConfig {
+  const provider = getImageProvider();
+  const hasV98Key = !!process.env.V98_API_KEY?.trim();
+  const v98BaseUrl = process.env.V98_BASE_URL?.trim() || null;
+  const errors: string[] = [];
+  let imageModel: string | null = null;
+
+  if (provider === "v98") {
+    imageModel = process.env.V98_IMAGE_MODEL?.trim() || "gpt-image-2";
+    if (!hasV98Key) errors.push("V98_API_KEY is missing.");
+    if (!v98BaseUrl) errors.push("V98_BASE_URL is missing.");
+  } else if (provider === "openai") {
+    imageModel = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
+    if (!process.env.OPENAI_API_KEY?.trim()) errors.push("OPENAI_API_KEY is missing.");
+  } else if (provider === "mock") {
+    imageModel = "mock";
+  }
+
+  const isConfigured = provider !== "none" && errors.length === 0;
+  return { provider, hasV98Key, v98BaseUrl, imageModel, isConfigured, errors };
+}
 
 /** Cấu hình endpoint sinh ảnh tương thích OpenAI (openai chính chủ hoặc V98). */
 function resolveImageConfig(
@@ -84,7 +117,13 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
   }
 
   const cfg = resolveImageConfig(provider);
-  if (!cfg) return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED" };
+  if (!cfg) {
+    const error =
+      provider === "v98"
+        ? "Thiếu V98_API_KEY hoặc V98_BASE_URL."
+        : "Thiếu OPENAI_API_KEY.";
+    return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED", error };
+  }
 
   try {
     const client = new OpenAI({ apiKey: cfg.apiKey, ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}) });
@@ -99,9 +138,18 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
     const url = res.data?.[0]?.url ?? null;
     if (b64) return { b64, url: null, mock: false, provider, model: cfg.model, status: "READY" };
     if (url) return { b64: null, url, mock: false, provider, model: cfg.model, status: "READY" };
-    return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED" };
-  } catch {
-    return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED" };
+    return {
+      b64: null,
+      url: null,
+      mock: false,
+      provider,
+      model: cfg.model,
+      status: "FAILED",
+      error: "No image URL or base64 returned from image model.",
+    };
+  } catch (err) {
+    const error = err instanceof Error ? err.message.slice(0, 300) : "Image API call failed.";
+    return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED", error };
   }
 }
 

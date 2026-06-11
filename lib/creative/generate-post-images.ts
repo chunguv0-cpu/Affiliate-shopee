@@ -7,19 +7,23 @@ import { getAIProvider, resolveProviderConfig } from "@/lib/ai/client";
 import {
   generateImageFromPrompt,
   getImageProvider,
+  getImageProviderConfig,
   type PromptImageResult,
 } from "@/lib/creative/image-provider";
 import { insertPostingLog } from "@/lib/posts/log";
 import type { CreativePackStatus, PublishMode } from "@/lib/types";
 
 const MIN_ASSETS = 4;
-const CREATIVE_BUCKET = process.env.CREATIVE_BUCKET?.trim() || "post-creative";
+// Bucket Storage cho ảnh (HOTFIX 17.2.3: mặc định post-creatives). Có thể override bằng CREATIVE_BUCKET.
+const CREATIVE_BUCKET = process.env.CREATIVE_BUCKET?.trim() || "post-creatives";
 
-// Logs (Phase 17 — fully AI).
+// Logs.
 const PROMPTS_CREATED = "POST_IMAGE_PROMPTS_CREATED";
-const GEN_STARTED = "POST_IMAGE_GENERATION_STARTED";
-const GEN_SUCCESS = "POST_IMAGE_GENERATION_SUCCESS";
-const GEN_FAILED = "POST_IMAGE_GENERATION_FAILED";
+const GEN_STARTED = "V98_IMAGE_GENERATION_STARTED";
+const GEN_SUCCESS = "V98_IMAGE_GENERATION_SUCCESS";
+const GEN_FAILED = "V98_IMAGE_GENERATION_FAILED";
+const CONFIG_INVALID = "V98_IMAGE_PROVIDER_CONFIG_INVALID";
+const STORAGE_UPLOAD_FAILED = "IMAGE_STORAGE_UPLOAD_FAILED";
 const PACK_READY = "POST_CREATIVE_PACK_READY";
 const PACK_PARTIAL = "POST_CREATIVE_PACK_PARTIAL";
 const PACK_FAILED = "POST_CREATIVE_PACK_FAILED";
@@ -47,6 +51,7 @@ export type GeneratePackResult = {
   status: CreativePackStatus;
   total: number; // số ảnh thật READY (không mock)
   publish_mode: PublishMode;
+  error?: string | null; // lỗi đọc được khi không đủ ảnh
 };
 
 // 4 góc ảnh cố định theo chiến lược.
@@ -138,25 +143,36 @@ export async function generateImagePromptPackForPost(ctx: PostImageContext): Pro
   }
 }
 
-/** Upload buffer ảnh lên Supabase Storage, trả public URL (hoặc null). */
+type UploadOutcome = { url: string | null; error: string | null };
+
+/** Upload buffer ảnh lên Supabase Storage, trả public URL + error đọc được. */
 async function uploadBuffer(
   supabase: SupabaseClient,
   postId: string,
   index: number,
   buffer: Buffer,
   contentType: string,
-): Promise<string | null> {
+): Promise<UploadOutcome> {
   try {
     const ext = contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "png";
     const path = `posts/${postId}/${index}.${ext}`;
     const { error } = await supabase.storage
       .from(CREATIVE_BUCKET)
       .upload(path, buffer, { contentType, upsert: true });
-    if (error) return null;
+    if (error) {
+      const msg = error.message || String(error);
+      const bucketMissing = /bucket.*not.*found|not found/i.test(msg);
+      return {
+        url: null,
+        error: bucketMissing
+          ? `Supabase Storage bucket '${CREATIVE_BUCKET}' is missing.`
+          : `Supabase Storage upload failed: ${msg}`,
+      };
+    }
     const { data } = supabase.storage.from(CREATIVE_BUCKET).getPublicUrl(path);
-    return data?.publicUrl ?? null;
-  } catch {
-    return null;
+    return { url: data?.publicUrl ?? null, error: data?.publicUrl ? null : "Storage public URL empty." };
+  } catch (err) {
+    return { url: null, error: err instanceof Error ? err.message.slice(0, 200) : "Storage upload error." };
   }
 }
 
@@ -166,11 +182,11 @@ async function uploadImage(
   postId: string,
   index: number,
   b64: string,
-): Promise<string | null> {
+): Promise<UploadOutcome> {
   try {
     return await uploadBuffer(supabase, postId, index, Buffer.from(b64, "base64"), "image/png");
-  } catch {
-    return null;
+  } catch (err) {
+    return { url: null, error: err instanceof Error ? err.message.slice(0, 200) : "Decode base64 failed." };
   }
 }
 
@@ -180,7 +196,7 @@ async function uploadImageFromUrl(
   postId: string,
   index: number,
   url: string,
-): Promise<string | null> {
+): Promise<UploadOutcome> {
   try {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), 12000);
@@ -190,13 +206,13 @@ async function uploadImageFromUrl(
     } finally {
       clearTimeout(t);
     }
-    if (!res.ok) return null;
+    if (!res.ok) return { url: null, error: `Fetch image URL failed: HTTP ${res.status}` };
     const contentType = res.headers.get("content-type") ?? "image/png";
-    if (!contentType.startsWith("image/")) return null;
+    if (!contentType.startsWith("image/")) return { url: null, error: "URL did not return an image." };
     const buffer = Buffer.from(await res.arrayBuffer());
     return await uploadBuffer(supabase, postId, index, buffer, contentType);
-  } catch {
-    return null;
+  } catch (err) {
+    return { url: null, error: err instanceof Error ? err.message.slice(0, 200) : "Re-host failed." };
   }
 }
 
@@ -210,8 +226,8 @@ export type MinimalPrompt = {
 const PER_IMAGE_TIMEOUT_MS = 30_000;
 const OVERALL_TIMEOUT_MS = 75_000;
 
-function failResult(provider: ReturnType<typeof getImageProvider>): PromptImageResult {
-  return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED" };
+function failResult(provider: ReturnType<typeof getImageProvider>, error?: string): PromptImageResult {
+  return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED", error: error ?? null };
 }
 
 /**
@@ -225,8 +241,34 @@ export async function materializeImages(
 ): Promise<GeneratePackResult> {
   const provider = getImageProvider();
   const prompts = promptsIn.slice(0, MIN_ASSETS);
+  const errorMessages: string[] = [];
 
-  await insertPostingLog(supabase, postId, GEN_STARTED, "SUCCESS", `Bắt đầu sinh ${prompts.length} ảnh (provider: ${provider}).`, {
+  // Gate cấu hình: thiếu key/base url -> dừng sớm với lỗi rõ ràng.
+  const cfg = getImageProviderConfig();
+  if (!cfg.isConfigured) {
+    const msg = cfg.errors.join(" ") || `Image provider chưa cấu hình (provider=${cfg.provider}).`;
+    await insertPostingLog(supabase, postId, CONFIG_INVALID, "FAILED", msg, { generated_post_id: postId });
+    try {
+      await supabase
+        .from("generated_posts")
+        .update({
+          creative_pack_status: "FAILED",
+          creative_pack_mode: "GENERATED_ONLY",
+          creative_min_assets: MIN_ASSETS,
+          publish_mode: "FEED",
+          creative_summary: "0/4 ảnh.",
+          creative_error: msg,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", postId);
+    } catch {
+      /* ignore */
+    }
+    await insertPostingLog(supabase, postId, PACK_FAILED, "FAILED", `Pack FAILED: ${msg}`, { generated_post_id: postId });
+    return { status: "FAILED", total: 0, publish_mode: "FEED", error: msg };
+  }
+
+  await insertPostingLog(supabase, postId, GEN_STARTED, "SUCCESS", `Bắt đầu sinh ${prompts.length} ảnh (provider: ${provider}, model: ${cfg.imageModel}).`, {
     generated_post_id: postId,
   });
 
@@ -234,12 +276,17 @@ export async function materializeImages(
   const genOne = (pr: string): Promise<PromptImageResult> =>
     Promise.race([
       generateImageFromPrompt(pr),
-      new Promise<PromptImageResult>((res) => setTimeout(() => res(failResult(provider)), PER_IMAGE_TIMEOUT_MS)),
+      new Promise<PromptImageResult>((res) =>
+        setTimeout(() => res(failResult(provider, "Image generation timed out (30s).")), PER_IMAGE_TIMEOUT_MS),
+      ),
     ]);
   const results = await Promise.race([
     Promise.all(prompts.map((p) => genOne(p.prompt))),
     new Promise<PromptImageResult[]>((res) =>
-      setTimeout(() => res(prompts.map(() => failResult(provider))), OVERALL_TIMEOUT_MS),
+      setTimeout(
+        () => res(prompts.map(() => failResult(provider, "Overall image generation timed out (75s)."))),
+        OVERALL_TIMEOUT_MS,
+      ),
     ),
   ]);
 
@@ -262,13 +309,24 @@ export async function materializeImages(
     let imageUrl: string | null = null;
     if (r.status === "READY") {
       if (r.b64) {
-        imageUrl = await uploadImage(supabase, postId, i + 1, r.b64);
+        const up = await uploadImage(supabase, postId, i + 1, r.b64);
+        imageUrl = up.url;
+        if (!up.url && up.error) {
+          errorMessages.push(up.error);
+          await insertPostingLog(supabase, postId, STORAGE_UPLOAD_FAILED, "FAILED", up.error, { generated_post_id: postId });
+        }
       } else if (r.url && !r.mock) {
-        // Ảnh thật trả về dạng URL (V98/OpenAI) -> re-host để bền; fallback URL gốc nếu lỗi.
-        imageUrl = (await uploadImageFromUrl(supabase, postId, i + 1, r.url)) ?? r.url;
+        // Ảnh thật trả về dạng URL (V98/OpenAI) -> re-host để bền; fallback URL gốc nếu re-host lỗi.
+        const up = await uploadImageFromUrl(supabase, postId, i + 1, r.url);
+        imageUrl = up.url ?? r.url;
+        if (!up.url && up.error) {
+          await insertPostingLog(supabase, postId, STORAGE_UPLOAD_FAILED, "FAILED", up.error, { generated_post_id: postId });
+        }
       } else if (r.url) {
         imageUrl = r.url; // mock placeholder, giữ nguyên
       }
+    } else if (r.error) {
+      errorMessages.push(r.error);
     }
     const ok = !!imageUrl;
     rows.push({
@@ -302,19 +360,23 @@ export async function materializeImages(
   const realReady = rows.filter((r) => r.status === "READY" && r.image_url && r.metadata.mock !== true).length;
   const anyReady = rows.filter((r) => r.status === "READY" && r.image_url).length;
 
+  const firstErr = errorMessages.find(Boolean) ?? null;
   let status: CreativePackStatus;
   let creativeError: string | null = null;
   if (realReady >= MIN_ASSETS) {
     status = "READY";
-  } else if (anyReady >= 1) {
+  } else if (anyReady >= 1 && realReady === 0) {
+    // Chỉ có ảnh mock.
     status = "PARTIAL";
-    creativeError =
-      realReady === 0
-        ? "Chỉ có ảnh mock — chưa đủ ảnh thật để đăng album. Hãy cấu hình IMAGE_PROVIDER=openai."
-        : `Chỉ có ${realReady} ảnh thật, chưa đủ ${MIN_ASSETS}.`;
+    creativeError = "Chỉ có ảnh mock — chưa đủ ảnh thật để đăng album. Đặt IMAGE_PROVIDER=v98 + V98_IMAGE_MODEL=gpt-image-2.";
+  } else if (realReady >= 1) {
+    status = "PARTIAL";
+    creativeError = `Chưa đủ ảnh thật: ${realReady}/${MIN_ASSETS}.${firstErr ? " " + firstErr : ""}`;
   } else {
     status = "FAILED";
-    creativeError = "Chưa tạo được ảnh thật cho bài viết.";
+    creativeError = firstErr
+      ? `Lỗi tạo ảnh: ${firstErr}`
+      : "Chưa tạo được ảnh thật cho bài viết.";
   }
 
   const publish_mode: PublishMode = status === "READY" ? "PHOTO_ALBUM" : "FEED";
@@ -351,7 +413,7 @@ export async function materializeImages(
     { generated_post_id: postId },
   );
 
-  return { status, total: realReady, publish_mode };
+  return { status, total: realReady, publish_mode, error: creativeError };
 }
 
 /**

@@ -377,9 +377,10 @@ export async function createAiPostWithCreatives(productId: string): Promise<OneS
     }
 
     const error =
-      packRes.status === "PARTIAL"
-        ? `Chưa đủ 4 ảnh thật (${packRes.total}/4). Hãy thử lại tạo ảnh.`
-        : "Không tạo được ảnh thật cho bài viết. Kiểm tra IMAGE_PROVIDER / model ảnh.";
+      packRes.error ??
+      (packRes.status === "PARTIAL"
+        ? `Chưa đủ 4 ảnh thật (${packRes.total}/4).`
+        : "Không tạo được ảnh thật cho bài viết.");
     await insertPostingLog(supabase, postId, ONE_STEP_FAILED, "FAILED", error, { generated_post_id: postId });
     return { ok: false, postId, error };
   } catch (err) {
