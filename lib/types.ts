@@ -625,4 +625,7 @@ export type CampaignRunCounters = {
   v98PerDayLimit?: number;
   jobsPending?: number;
   jobsDone?: number;
+  jobsWaitingRetry?: number;
+  jobsFailed?: number;
+  lastJobError?: string | null;
 };

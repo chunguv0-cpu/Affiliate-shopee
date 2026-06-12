@@ -1,0 +1,15 @@
+{
+  "name": "grok-image-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Worker tạo ảnh qua tài khoản Grok bằng cookie (Playwright). CHẠY NGOÀI Vercel.",
+  "scripts": {
+    "start": "node index.mjs",
+    "install:browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "playwright": "^1.47.0"
+  }
+}

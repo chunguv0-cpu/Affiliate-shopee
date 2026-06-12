@@ -8,7 +8,7 @@ import OpenAI from "openai";
  * KHÔNG bao giờ throw — lỗi trả mảng rỗng để không làm hỏng việc tạo bài.
  */
 
-export type ImageProvider = "mock" | "openai" | "v98" | "none";
+export type ImageProvider = "mock" | "openai" | "v98" | "grok_gateway" | "none";
 const TEXT_FREE_IMAGE_PROMPT_RULE = "no text, no letters, no words, no watermark, no logo, no UI text";
 const V98_TIMEOUT_ERROR = "V98_IMAGE_TIMEOUT_RETRY_LATER";
 
@@ -34,11 +34,70 @@ export type GeneratedImage = {
 
 export function getImageProvider(): ImageProvider {
   const raw = process.env.IMAGE_PROVIDER?.trim().toLowerCase();
-  if (raw === "openai" || raw === "v98" || raw === "none" || raw === "mock") return raw;
+  if (raw === "grok_gateway" || raw === "openai" || raw === "v98" || raw === "none" || raw === "mock") return raw;
   // Mặc định: ưu tiên V98 (nếu đang dùng), rồi OpenAI, cuối cùng mock.
   if (process.env.V98_API_KEY?.trim() && process.env.V98_BASE_URL?.trim()) return "v98";
   if (process.env.OPENAI_API_KEY?.trim()) return "openai";
   return "mock";
+}
+
+/** Provider fallback khi grok_gateway lỗi/hết hạn cookie: v98 | openai | mock | none. */
+function grokGatewayFallback(): ImageProvider {
+  const raw = process.env.GROK_GATEWAY_FALLBACK?.trim().toLowerCase();
+  if (raw === "v98" || raw === "openai" || raw === "mock" || raw === "none") return raw;
+  // Mặc định fallback về V98 nếu có cấu hình, không thì mock.
+  if (process.env.V98_API_KEY?.trim() && process.env.V98_BASE_URL?.trim()) return "v98";
+  return "mock";
+}
+
+/**
+ * Gọi Grok image worker (chạy ngoài Vercel — Playwright + cookie tài khoản Grok).
+ * Hợp đồng: POST {GROK_GATEWAY_URL}/generate, Bearer GROK_GATEWAY_SECRET,
+ * body { prompt, size } -> { b64 } | { url } | { image_url } | { error }.
+ * KHÔNG bao giờ throw. KHÔNG log token/cookie.
+ */
+async function callGrokGateway(prompt: string): Promise<PromptImageResult> {
+  const base = process.env.GROK_GATEWAY_URL?.trim();
+  const secret = process.env.GROK_GATEWAY_SECRET?.trim();
+  const model = process.env.GROK_GATEWAY_MODEL?.trim() || "grok-image";
+  if (!base) {
+    return { b64: null, url: null, mock: false, provider: "grok_gateway", model: null, status: "FAILED", error: "Thiếu GROK_GATEWAY_URL." };
+  }
+  const endpoint = base.replace(/\/$/, "").endsWith("/generate") ? base.replace(/\/$/, "") : `${base.replace(/\/$/, "")}/generate`;
+  const timeoutMs = readIntEnv("GROK_GATEWAY_TIMEOUT_MS", 50_000, 5_000, 110_000);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(secret ? { Authorization: `Bearer ${secret}` } : {}) },
+      cache: "no-store",
+      signal: controller.signal,
+      body: JSON.stringify({ prompt, size: "1024x1024" }),
+    });
+    const text = await res.text();
+    let json: Record<string, unknown> = {};
+    try {
+      json = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+      json = {};
+    }
+    if (!res.ok) {
+      const msg = typeof json.error === "string" ? json.error : `Grok gateway HTTP ${res.status}`;
+      return { b64: null, url: null, mock: false, provider: "grok_gateway", model, status: "FAILED", error: msg.slice(0, 300) };
+    }
+    const b64 = typeof json.b64 === "string" ? json.b64 : typeof json.b64_json === "string" ? json.b64_json : null;
+    const url = typeof json.url === "string" ? json.url : typeof json.image_url === "string" ? json.image_url : null;
+    if (b64) return { b64, url: null, mock: false, provider: "grok_gateway", model, status: "READY" };
+    if (url && /^https?:\/\//i.test(url)) return { b64: null, url, mock: false, provider: "grok_gateway", model, status: "READY" };
+    const err = typeof json.error === "string" ? json.error : "Grok gateway không trả về ảnh.";
+    return { b64: null, url: null, mock: false, provider: "grok_gateway", model, status: "FAILED", error: err.slice(0, 300) };
+  } catch (err) {
+    const m = err instanceof Error ? (err.name === "AbortError" ? "Grok gateway quá thời gian." : err.message) : "Grok gateway lỗi.";
+    return { b64: null, url: null, mock: false, provider: "grok_gateway", model, status: "FAILED", error: m.slice(0, 300) };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Kết quả sinh 1 ảnh từ prompt cụ thể (Phase 17 — fully AI). */
@@ -79,6 +138,9 @@ export function getImageProviderConfig(): ImageProviderConfig {
     imageModel = process.env.V98_IMAGE_MODEL?.trim() || "gpt-image-2";
     if (!hasV98Key) errors.push("V98_API_KEY is missing.");
     if (!v98BaseUrl) errors.push("V98_BASE_URL is missing.");
+  } else if (provider === "grok_gateway") {
+    imageModel = process.env.GROK_GATEWAY_MODEL?.trim() || "grok-image";
+    if (!process.env.GROK_GATEWAY_URL?.trim()) errors.push("GROK_GATEWAY_URL is missing.");
   } else if (provider === "openai") {
     imageModel = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
     if (!process.env.OPENAI_API_KEY?.trim()) errors.push("OPENAI_API_KEY is missing.");
@@ -115,7 +177,17 @@ function resolveImageConfig(
  * - mock: trả URL placeholder, mock=true (KHÔNG production-ready).
  */
 export async function generateImageFromPrompt(prompt: string): Promise<PromptImageResult> {
-  const provider = getImageProvider();
+  let provider = getImageProvider();
+
+  // Grok qua cookie (worker ngoài Vercel). Lỗi/hết hạn cookie -> fallback an toàn.
+  if (provider === "grok_gateway") {
+    const g = await callGrokGateway(prompt);
+    if (g.status === "READY") return g;
+    const fb = grokGatewayFallback();
+    if (fb === "none") return g; // giữ lỗi gốc
+    provider = fb; // chạy tiếp với provider fallback (v98/openai/mock) bên dưới
+  }
+
   if (provider === "none") {
     return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED" };
   }

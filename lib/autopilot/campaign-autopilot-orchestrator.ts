@@ -1323,16 +1323,22 @@ export async function getCampaignRunCounters(supabase: SupabaseClient, run: AiCa
   let v98Today = 0;
   let jobsPending = 0;
   let jobsDone = 0;
+  let jobsWaitingRetry = 0;
+  let jobsFailed = 0;
+  let lastJobError: string | null = null;
   let v98PerDayLimit = 0;
   try {
     const { countV98ImagesToday, readCostLimits } = await import("@/lib/cost/cost-guardrails");
     const c = await countV98ImagesToday(supabase, run.id);
     v98Today = c.campaign;
     v98PerDayLimit = readCostLimits().perCampaignPerDay;
-    const { data: jobRows } = await supabase.from("ai_jobs").select("status").eq("ai_campaign_run_id", run.id);
-    for (const j of (jobRows ?? []) as Array<{ status: string }>) {
+    const { data: jobRows } = await supabase.from("ai_jobs").select("status,error_message,updated_at").eq("ai_campaign_run_id", run.id).order("updated_at", { ascending: false });
+    for (const j of (jobRows ?? []) as Array<{ status: string; error_message?: string | null }>) {
       if (j.status === "PENDING" || j.status === "RUNNING" || j.status === "WAITING_RETRY") jobsPending += 1;
+      if (j.status === "WAITING_RETRY") jobsWaitingRetry += 1;
+      if (j.status === "FAILED") jobsFailed += 1;
       else if (j.status === "SUCCESS") jobsDone += 1;
+      if (!lastJobError && j.error_message) lastJobError = j.error_message.slice(0, 180);
     }
   } catch {
     // không chặn dashboard nếu đếm lỗi
@@ -1353,5 +1359,8 @@ export async function getCampaignRunCounters(supabase: SupabaseClient, run: AiCa
     v98PerDayLimit,
     jobsPending,
     jobsDone,
+    jobsWaitingRetry,
+    jobsFailed,
+    lastJobError,
   };
 }
