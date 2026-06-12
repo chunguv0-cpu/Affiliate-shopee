@@ -14,6 +14,7 @@ import {
   getImageProviderConfig,
   type PromptImageResult,
 } from "@/lib/creative/image-provider";
+import { canSpendV98 } from "@/lib/cost/cost-guardrails";
 import { insertPostingLog } from "@/lib/posts/log";
 import type { CreativePackStatus, PublishMode } from "@/lib/types";
 
@@ -881,8 +882,8 @@ export async function generateAndStoreImageAsset(
   postId: string,
   sortOrder: number,
   prompt: MinimalPrompt,
-  options: { force?: boolean } = {},
-): Promise<{ ok: boolean; mock: boolean; image_url: string | null; error: string | null }> {
+  options: { force?: boolean; campaignRunId?: string | null } = {},
+): Promise<{ ok: boolean; mock: boolean; image_url: string | null; error: string | null; blockedByBudget?: boolean }> {
   // Keep AI images text-free, then render every Vietnamese overlay locally for legibility.
   const overlay = normalizeOverlayText(prompt.caption_overlay, 42);
   const cleanPrompt = withTextFreePromptRule(prompt.prompt);
@@ -903,6 +904,18 @@ export async function generateAndStoreImageAsset(
       prompt_hash: promptHash,
     });
     return { ok: true, mock: false, image_url: reusable, error: null };
+  }
+
+  // V98 cost guardrail (per-campaign/day + global/day). Source images không qua đây.
+  const budget = await canSpendV98(supabase, options.campaignRunId ?? null);
+  if (!budget.allowed) {
+    await insertPostingLog(supabase, postId, "V98_CALL_BLOCKED_BY_BUDGET", "FAILED", budget.reason ?? "Đã đạt giới hạn V98.", {
+      generated_post_id: postId,
+      slot_index: sortOrder,
+      v98_global_today: budget.global,
+      v98_campaign_today: budget.campaign,
+    });
+    return { ok: false, mock: false, image_url: null, error: budget.reason ?? "Đã đạt giới hạn V98 hôm nay.", blockedByBudget: true };
   }
 
   await insertPostingLog(supabase, postId, TEMPLATE_SELECTED, "SUCCESS", `Creative template: ${creativeTemplate}.`, {

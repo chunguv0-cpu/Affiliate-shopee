@@ -111,7 +111,8 @@ function elapsedMsSince(iso: string | null | undefined): number | null {
 }
 
 function isRateLimitMessage(message: string | null | undefined): boolean {
-  return /(^|\D)429($|\D)|rate.?limit|too many|try again|overload|quota/i.test(message ?? "");
+  // Gồm cả thông báo "đã đạt giới hạn V98" -> dùng nhịp retry chậm hơn, đỡ poll.
+  return /(^|\D)429($|\D)|rate.?limit|too many|try again|overload|quota|giới hạn|gioi han/i.test(message ?? "");
 }
 
 function retryDelayMs(job: Pick<AiJob, "attempts" | "error_message">): number {
@@ -781,7 +782,25 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       if (!p || !p.prompt) return failStep(`Thiếu prompt ảnh #${idx}.`);
       // Gán overlay text -> generateAndStoreImageAsset sẽ render chữ lên ảnh.
       const pWithOverlay = { ...p, caption_overlay: overlays[idx - 1] ?? p.caption_overlay ?? "" };
-      const res = await generateAndStoreImageAsset(supabase, postId, sortOrder, pWithOverlay);
+      const res = await generateAndStoreImageAsset(supabase, postId, sortOrder, pWithOverlay, {
+        campaignRunId: job.ai_campaign_run_id ?? null,
+      });
+      if (!res.ok && res.blockedByBudget) {
+        // Hết quota V98 hôm nay -> tạm hoãn (KHÔNG tính attempts), chờ reset.
+        const budgetMsg = res.error ?? "Đã đạt giới hạn V98 hôm nay.";
+        await supabase
+          .from("ai_jobs")
+          .update({ status: "WAITING_RETRY", error_message: budgetMsg.slice(0, 500), locked_at: null, updated_at: nowIso() })
+          .eq("id", jobId);
+        if (job.ai_campaign_run_id) {
+          await supabase
+            .from("ai_campaign_runs")
+            .update({ automation_error: budgetMsg.slice(0, 500), updated_at: nowIso() })
+            .eq("id", job.ai_campaign_run_id);
+        }
+        await insertPostingLog(supabase, postId, "AUTOPILOT_FAILED_RECOVERABLE", "FAILED", budgetMsg, { ai_job_id: jobId, budget_block: true });
+        return { ok: false, jobId, step, status: "WAITING_RETRY", progress, error: budgetMsg };
+      }
       if (!res.ok) {
         await insertPostingLog(supabase, postId, GROUNDED_GEN_FAILED, "FAILED", res.error ?? `Ảnh #${idx} lỗi.`, { ai_job_id: jobId });
         return failStep(res.error ?? `Sinh ảnh #${idx} thất bại.`);

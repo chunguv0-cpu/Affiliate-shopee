@@ -29,6 +29,7 @@ export const NAV_ITEMS: NavItem[] = [
 /** Mục phụ (vẫn truy cập được, không phải workflow chính). */
 export const SECONDARY_NAV_ITEMS: NavItem[] = [
   { label: "Bài đăng", href: "/dashboard/posts", icon: "📝" },
+  { label: "Hàng đợi AI Jobs", href: "/dashboard/jobs", icon: "🧵" },
   { label: "Chiến dịch", href: "/dashboard/campaigns", icon: "🚀" },
   { label: "Vận hành hôm nay", href: "/dashboard/ops", icon: "🎯" },
 ];

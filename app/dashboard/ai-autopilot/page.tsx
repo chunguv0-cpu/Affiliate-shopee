@@ -263,6 +263,17 @@ export default async function AiAutopilotPage() {
                 <Counter label="Đã đăng" value={counters.postsPublished} />
               </div>
 
+              <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-700">
+                  V98 hôm nay: {counters.v98Today ?? 0}{counters.v98PerDayLimit ? `/${counters.v98PerDayLimit}` : ""}
+                </span>
+                <span className="rounded bg-blue-50 px-2 py-0.5 text-blue-700">Job đang chờ: {counters.jobsPending ?? 0}</span>
+                <span className="rounded bg-emerald-50 px-2 py-0.5 text-emerald-700">Job xong: {counters.jobsDone ?? 0}</span>
+                {(counters.v98PerDayLimit ?? 0) > 0 && (counters.v98Today ?? 0) >= (counters.v98PerDayLimit ?? 0) ? (
+                  <span className="rounded bg-red-50 px-2 py-0.5 text-red-700">Đã đạt giới hạn V98 hôm nay</span>
+                ) : null}
+              </div>
+
               <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-gray-500 sm:grid-cols-3">
                 <div>Autopilot: {run.is_autopilot_enabled && !run.paused ? "Đang bật" : "Tạm dừng"}</div>
                 <div>Last cron hit: {formatDateTime(run.last_cron_hit_at)}</div>

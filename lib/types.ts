@@ -620,4 +620,9 @@ export type CampaignRunCounters = {
   postsApproved: number;
   postsScheduled: number;
   postsPublished: number;
+  // Phase — performance/cost.
+  v98Today?: number;
+  v98PerDayLimit?: number;
+  jobsPending?: number;
+  jobsDone?: number;
 };

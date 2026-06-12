@@ -1307,6 +1307,25 @@ export async function getCampaignRunCounters(supabase: SupabaseClient, run: AiCa
     .eq("ai_campaign_run_id", run.id);
   const list = (posts ?? []) as Array<{ status: string; review_status: string | null; creative_pack_status: string | null }>;
 
+  // Performance/cost: V98 ảnh hôm nay + jobs pending/done của chiến dịch.
+  let v98Today = 0;
+  let jobsPending = 0;
+  let jobsDone = 0;
+  let v98PerDayLimit = 0;
+  try {
+    const { countV98ImagesToday, readCostLimits } = await import("@/lib/cost/cost-guardrails");
+    const c = await countV98ImagesToday(supabase, run.id);
+    v98Today = c.campaign;
+    v98PerDayLimit = readCostLimits().perCampaignPerDay;
+    const { data: jobRows } = await supabase.from("ai_jobs").select("status").eq("ai_campaign_run_id", run.id);
+    for (const j of (jobRows ?? []) as Array<{ status: string }>) {
+      if (j.status === "PENDING" || j.status === "RUNNING" || j.status === "WAITING_RETRY") jobsPending += 1;
+      else if (j.status === "SUCCESS") jobsDone += 1;
+    }
+  } catch {
+    // không chặn dashboard nếu đếm lỗi
+  }
+
   return {
     opportunities: run.product_opportunities.length,
     sourced,
@@ -1318,5 +1337,9 @@ export async function getCampaignRunCounters(supabase: SupabaseClient, run: AiCa
     postsApproved: list.filter((p) => p.review_status === "APPROVED").length,
     postsScheduled: list.filter((p) => p.review_status === "APPROVED" && p.status !== "PUBLISHED").length,
     postsPublished: list.filter((p) => p.status === "PUBLISHED").length,
+    v98Today,
+    v98PerDayLimit,
+    jobsPending,
+    jobsDone,
   };
 }
