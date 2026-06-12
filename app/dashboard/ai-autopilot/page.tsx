@@ -37,6 +37,18 @@ const ORDER: CampaignRunStatus[] = [
   "COMPLETED",
 ];
 
+const CRON_ACTIVE_STATUSES: CampaignRunStatus[] = [
+  "APPROVED",
+  "SOURCING_PRODUCTS",
+  "CONVERTING_LINKS",
+  "CREATING_PRODUCTS",
+  "CREATING_POSTS",
+  "CREATING_CREATIVES",
+  "SCHEDULING",
+  "SCHEDULED",
+  "RUNNING",
+];
+
 function statusRank(s: CampaignRunStatus): number {
   const i = ORDER.indexOf(s);
   return i === -1 ? 0 : i;
@@ -51,8 +63,32 @@ function statusBadge(s: CampaignRunStatus): string {
   return "bg-blue-100 text-blue-700";
 }
 
+function formatDateTime(iso: string | null): string {
+  if (!iso) return "Chưa có";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Không rõ";
+  return d.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+}
+
 export default async function AiAutopilotPage() {
   const runs = await getCampaignRuns();
+  const cronConfigured = Boolean(process.env.CRON_SECRET?.trim());
+  const activeForCron = runs
+    .map((x) => x.run)
+    .filter((r) => CRON_ACTIVE_STATUSES.includes(r.status) && !r.paused && r.is_autopilot_enabled);
+  const lastAutoRun =
+    activeForCron
+      .map((r) => r.last_auto_run_at)
+      .filter((x): x is string => typeof x === "string" && x.length > 0)
+      .sort()
+      .at(-1) ?? null;
+  const nextAutoRun =
+    activeForCron
+      .map((r) => r.next_auto_run_at)
+      .filter((x): x is string => typeof x === "string" && x.length > 0)
+      .sort()[0] ?? null;
+  const lastRunMs = lastAutoRun ? new Date(lastAutoRun).getTime() : NaN;
+  const cronStale = activeForCron.length > 0 && (!Number.isFinite(lastRunMs) || Date.now() - lastRunMs > 5 * 60 * 1000);
 
   return (
     <div className="space-y-6">
@@ -68,6 +104,38 @@ export default async function AiAutopilotPage() {
       </div>
 
       <NewCampaignForm />
+
+      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Chẩn đoán Autopilot</h2>
+            <p className="mt-1 text-xs text-gray-500">Endpoint cron: <code>/api/cron/run-ai-autopilot</code></p>
+          </div>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${cronConfigured ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>
+            CRON_SECRET: {cronConfigured ? "đã cấu hình" : "chưa cấu hình"}
+          </span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Counter label="Đang chờ cron" value={activeForCron.length} />
+          <div className="rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5">
+            <div className="text-xs font-semibold text-gray-900">{formatDateTime(lastAutoRun)}</div>
+            <div className="text-[10px] text-gray-500">Lần chạy gần nhất</div>
+          </div>
+          <div className="rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5">
+            <div className="text-xs font-semibold text-gray-900">{formatDateTime(nextAutoRun)}</div>
+            <div className="text-[10px] text-gray-500">Lần chạy kế tiếp</div>
+          </div>
+          <div className="rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5">
+            <div className="text-xs font-semibold text-gray-900">{activeForCron[0]?.current_step ?? "Không có"}</div>
+            <div className="text-[10px] text-gray-500">Bước đang chờ</div>
+          </div>
+        </div>
+        {cronStale ? (
+          <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Cron Autopilot chưa chạy gần đây. Hãy kiểm tra cron-job.org hoặc Vercel cron.
+          </p>
+        ) : null}
+      </div>
 
       <div className="space-y-4">
         <h2 className="text-base font-semibold text-gray-900">Chiến dịch ({runs.length})</h2>
@@ -128,8 +196,14 @@ export default async function AiAutopilotPage() {
                 <Counter label="Đã đăng" value={counters.postsPublished} />
               </div>
 
-              {run.error_message ? (
-                <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">{run.error_message}</p>
+              <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-gray-500 sm:grid-cols-3">
+                <div>Autopilot: {run.is_autopilot_enabled && !run.paused ? "Đang bật" : "Tạm dừng"}</div>
+                <div>Last auto run: {formatDateTime(run.last_auto_run_at)}</div>
+                <div>Next auto run: {formatDateTime(run.next_auto_run_at)}</div>
+              </div>
+
+              {run.error_message || run.automation_error ? (
+                <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">{run.error_message ?? run.automation_error}</p>
               ) : null}
 
               {run.sourcing_diagnostics.length > 0 ? (

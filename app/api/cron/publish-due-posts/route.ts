@@ -49,6 +49,28 @@ async function handle(request: Request) {
     const nowIso = new Date().toISOString();
 
     // Phase 19: chỉ đăng bài ĐÃ DUYỆT (review_status=APPROVED). Bài chưa duyệt -> bỏ qua + log.
+    const { data: creativeNotReady } = await supabase
+      .from("generated_posts")
+      .select("id")
+      .eq("status", "READY")
+      .eq("should_publish", true)
+      .gte("ai_score", 80)
+      .neq("creative_pack_status", "READY")
+      .not("scheduled_at", "is", null)
+      .lte("scheduled_at", nowIso)
+      .eq("review_status", "APPROVED")
+      .limit(20);
+    if (creativeNotReady && creativeNotReady.length > 0) {
+      await insertPostingLog(
+        supabase,
+        null,
+        "CRON_SKIPPED_CREATIVE_NOT_READY",
+        "SUCCESS",
+        `Bỏ qua ${creativeNotReady.length} bài đến hạn nhưng pack ảnh chưa READY.`,
+        { skipped: creativeNotReady.length },
+      );
+    }
+
     const { data: notApproved } = await supabase
       .from("generated_posts")
       .select("id")
@@ -78,6 +100,7 @@ async function handle(request: Request) {
       .eq("should_publish", true)
       .gte("ai_score", 80)
       .eq("review_status", "APPROVED")
+      .eq("creative_pack_status", "READY")
       .not("scheduled_at", "is", null)
       .lte("scheduled_at", nowIso)
       .order("scheduled_at", { ascending: true })

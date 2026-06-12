@@ -123,7 +123,7 @@ export async function approvePost(id: string): Promise<SimpleResult> {
     const supabase = createSupabaseAdminClient();
     const { data: row } = await supabase
       .from("generated_posts")
-      .select("id, ai_score, creative_pack_status")
+      .select("id, ai_score, creative_pack_status, ai_campaign_run_id")
       .eq("id", id)
       .single();
     if (!row) return { ok: false, error: "Không tìm thấy bài." };
@@ -145,6 +145,22 @@ export async function approvePost(id: string): Promise<SimpleResult> {
       })
       .eq("id", id);
     if (error) return { ok: false, error: `Duyệt thất bại: ${error.message}` };
+    const runId = (row as { ai_campaign_run_id?: string | null }).ai_campaign_run_id ?? null;
+    if (runId) {
+      const now = new Date().toISOString();
+      await supabase
+        .from("ai_campaign_runs")
+        .update({
+          status: "SCHEDULING",
+          current_step: "SCHEDULING",
+          is_autopilot_enabled: true,
+          next_auto_run_at: now,
+          automation_error: null,
+          updated_at: now,
+        })
+        .eq("id", runId)
+        .in("status", ["WAITING_POST_REVIEW", "SCHEDULED", "RUNNING"]);
+    }
     await insertPostingLog(supabase, id, "POST_APPROVED", "SUCCESS", "Người dùng duyệt bài (chờ xếp lịch).", null);
     revalidatePath(PATH);
     revalidatePath("/dashboard/ai-autopilot");
@@ -161,12 +177,13 @@ export async function approveAllEligible(): Promise<{ ok: boolean; approved: num
     const supabase = createSupabaseAdminClient();
     const { data } = await supabase
       .from("generated_posts")
-      .select("id, ai_score")
+      .select("id, ai_score, ai_campaign_run_id")
       .eq("review_status", "PENDING_REVIEW")
       .eq("creative_pack_status", "READY")
       .limit(200);
-    const rows = (data ?? []) as Array<{ id: string; ai_score: number | null }>;
+    const rows = (data ?? []) as Array<{ id: string; ai_score: number | null; ai_campaign_run_id: string | null }>;
     let approved = 0;
+    const campaignRunIds = new Set<string>();
     for (const r of rows) {
       const { error } = await supabase
         .from("generated_posts")
@@ -183,8 +200,24 @@ export async function approveAllEligible(): Promise<{ ok: boolean; approved: num
         .eq("review_status", "PENDING_REVIEW");
       if (!error) {
         approved += 1;
+        if (r.ai_campaign_run_id) campaignRunIds.add(r.ai_campaign_run_id);
         await insertPostingLog(supabase, r.id, "POST_APPROVED", "SUCCESS", "Duyệt hàng loạt (đạt chuẩn).", null);
       }
+    }
+    if (campaignRunIds.size > 0) {
+      const now = new Date().toISOString();
+      await supabase
+        .from("ai_campaign_runs")
+        .update({
+          status: "SCHEDULING",
+          current_step: "SCHEDULING",
+          is_autopilot_enabled: true,
+          next_auto_run_at: now,
+          automation_error: null,
+          updated_at: now,
+        })
+        .in("id", Array.from(campaignRunIds))
+        .in("status", ["WAITING_POST_REVIEW", "SCHEDULED", "RUNNING"]);
     }
     revalidatePath(PATH);
     revalidatePath("/dashboard/ai-autopilot");

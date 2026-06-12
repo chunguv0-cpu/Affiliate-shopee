@@ -40,6 +40,23 @@ export async function createAiPostImageJob(productId: string): Promise<CreateJob
       return { ok: false, error: "Sản phẩm chưa có link Affiliate hợp lệ. Vui lòng chuyển link trước." };
     }
 
+    const { data: existingJobs } = await supabase
+      .from("ai_jobs")
+      .select("id, status")
+      .eq("job_type", JOB_TYPE)
+      .eq("related_product_id", p.id)
+      .in("status", ["PENDING", "RUNNING", "WAITING_RETRY", "SUCCESS"])
+      .order("updated_at", { ascending: false })
+      .limit(1);
+    const existing = existingJobs?.[0] as { id: string; status: string } | undefined;
+    if (existing) {
+      await insertPostingLog(supabase, null, "AUTOPILOT_CONTINUED_EXISTING_JOB", "SUCCESS", `Dùng lại job ${existing.status} cho "${p.product_name}", không tạo trùng.`, {
+        ai_job_id: existing.id,
+        product_id: p.id,
+      });
+      return { ok: true, jobId: existing.id };
+    }
+
     const { data: job, error: jobErr } = await supabase
       .from("ai_jobs")
       .insert({

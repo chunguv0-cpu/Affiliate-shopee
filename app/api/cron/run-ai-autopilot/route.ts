@@ -17,7 +17,6 @@ const ACTIVE_STATUSES: CampaignRunStatus[] = [
   "CREATING_PRODUCTS",
   "CREATING_POSTS",
   "CREATING_CREATIVES",
-  "WAITING_POST_REVIEW",
   "SCHEDULING",
   "SCHEDULED",
   "RUNNING",
@@ -35,9 +34,9 @@ function checkAuth(request: Request): NextResponse | null {
 }
 
 function readMaxRuns(): number {
-  const raw = process.env.MAX_CAMPAIGN_RUNS_PER_CRON?.trim();
+  const raw = process.env.MAX_CAMPAIGNS_PER_CRON_RUN?.trim() || process.env.MAX_CAMPAIGN_RUNS_PER_CRON?.trim();
   const n = raw ? Number.parseInt(raw, 10) : NaN;
-  return Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 2;
+  return Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 1;
 }
 
 /**
@@ -50,14 +49,23 @@ async function handle(request: Request) {
 
   try {
     const supabase = createSupabaseAdminClient();
-    const { data } = await supabase
+    const maxRuns = readMaxRuns();
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
       .from("ai_campaign_runs")
-      .select("id")
+      .select("id, next_auto_run_at, is_autopilot_enabled")
       .in("status", ACTIVE_STATUSES)
       .eq("paused", false)
       .order("updated_at", { ascending: true })
-      .limit(readMaxRuns());
-    const runIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+      .limit(maxRuns * 5);
+    if (error) {
+      return NextResponse.json({ ok: false, error: `Không tải được campaign autopilot: ${error.message}` }, { status: 500 });
+    }
+    const runIds = ((data ?? []) as Array<{ id: string; next_auto_run_at?: string | null; is_autopilot_enabled?: boolean | null }>)
+      .filter((r) => r.is_autopilot_enabled !== false)
+      .filter((r) => !r.next_auto_run_at || r.next_auto_run_at <= nowIso)
+      .slice(0, maxRuns)
+      .map((r) => r.id);
 
     const results: AutopilotSummary[] = [];
     for (const id of runIds) {
@@ -71,6 +79,7 @@ async function handle(request: Request) {
     return NextResponse.json({
       ok: true,
       campaign_runs_processed: results.length,
+      current_step: results[0]?.current_step ?? null,
       products_sourced: agg("products_sourced"),
       links_converted: agg("links_converted"),
       products_created: agg("products_created"),

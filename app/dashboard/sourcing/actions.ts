@@ -40,7 +40,17 @@ export type OpportunityInput = {
   confidence?: string | null;
 };
 
-const VALID_STATUSES: SourcingStatus[] = ["NEW", "SOURCING", "LINK_READY", "IMPORTED", "REJECTED"];
+const VALID_STATUSES: SourcingStatus[] = [
+  "NEW",
+  "NEEDS_LINK",
+  "SOURCING",
+  "PROVIDER_MISSING",
+  "LINK_CONVERSION_FAILED",
+  "MANUAL_REQUIRED",
+  "LINK_READY",
+  "IMPORTED",
+  "REJECTED",
+];
 
 function rowFromOpportunity(input: OpportunityInput) {
   return {

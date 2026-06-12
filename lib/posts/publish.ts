@@ -49,7 +49,7 @@ export async function publishGeneratedPostById(
     const { data, error } = await supabase
       .from("generated_posts")
       .select(
-        "id, caption, status, should_publish, ai_score, creative_status, creative_image_url, facebook_publish_type, publish_mode, creative_pack_status, products(affiliate_link)",
+        "id, caption, status, should_publish, ai_score, review_status, ai_campaign_run_id, creative_status, creative_image_url, facebook_publish_type, publish_mode, creative_pack_status, products(affiliate_link)",
       )
       .eq("id", postId)
       .single();
@@ -64,6 +64,8 @@ export async function publishGeneratedPostById(
       status: GeneratedPostStatus;
       should_publish: boolean;
       ai_score: number | null;
+      review_status: string | null;
+      ai_campaign_run_id: string | null;
       creative_status: string | null;
       creative_image_url: string | null;
       facebook_publish_type: string | null;
@@ -100,6 +102,9 @@ export async function publishGeneratedPostById(
         ok: false,
         error: "Chỉ bài ở trạng thái Sẵn sàng (READY) mới có thể đăng.",
       };
+    }
+    if (row.review_status !== "APPROVED") {
+      return { ok: false, error: "Bài chưa được duyệt trong mục Chờ duyệt bài." };
     }
     if (row.should_publish !== true) {
       return { ok: false, error: "Bài chưa được AI duyệt để đăng." };
@@ -220,6 +225,20 @@ export async function publishGeneratedPostById(
           updated_at: new Date().toISOString(),
         })
         .eq("id", postId);
+      if (row.ai_campaign_run_id) {
+        await supabase
+          .from("ai_campaign_runs")
+          .update({
+            status: "RUNNING",
+            current_step: "RUNNING",
+            is_autopilot_enabled: true,
+            next_auto_run_at: new Date().toISOString(),
+            automation_error: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", row.ai_campaign_run_id)
+          .in("status", ["SCHEDULED", "RUNNING"]);
+      }
 
       await insertPostingLog(
         supabase,

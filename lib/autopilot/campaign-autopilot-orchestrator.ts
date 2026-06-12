@@ -28,6 +28,7 @@ import type {
   CampaignSourcingDiagnostic,
   ProductOpportunity,
   SourcedCandidate,
+  SourcingStatus,
 } from "@/lib/types";
 
 const NOVELTY_WINDOW_DAYS = readIntEnv("PRODUCT_NOVELTY_WINDOW_DAYS", 30, 1, 365);
@@ -73,9 +74,13 @@ const LOG = {
   CREATIVE_STEP: "CREATIVE_JOB_STEP_PROCESSED",
   POST_SCHEDULED: "POST_SCHEDULED",
   SKIPPED_DUP: "AUTOPILOT_SKIPPED_DUPLICATE",
+  CONTINUED_JOB: "AUTOPILOT_CONTINUED_EXISTING_JOB",
   FAILED_RECOVERABLE: "AUTOPILOT_FAILED_RECOVERABLE",
   FAILED_NON_RECOVERABLE: "AUTOPILOT_FAILED_NON_RECOVERABLE",
 };
+
+const AUTO_NEXT_DELAY_MS = 60_000;
+const AUTO_RETRY_DELAY_MS = 5 * 60_000;
 
 export type AutopilotStepInput = {
   campaignRunId?: string;
@@ -152,6 +157,12 @@ export function parseCampaignRunRow(row: Record<string, unknown>): AiCampaignRun
     current_step: (row.current_step as string | null) ?? null,
     progress_current: Number(row.progress_current) || 0,
     progress_total: Number(row.progress_total) || 0,
+    is_autopilot_enabled: row.is_autopilot_enabled !== false,
+    auto_started_at: (row.auto_started_at as string | null) ?? null,
+    last_auto_run_at: (row.last_auto_run_at as string | null) ?? null,
+    next_auto_run_at: (row.next_auto_run_at as string | null) ?? null,
+    automation_error: (row.automation_error as string | null) ?? null,
+    automation_attempts: Number(row.automation_attempts) || 0,
     paused: Boolean(row.paused),
     created_at: String(row.created_at ?? ""),
     updated_at: String(row.updated_at ?? ""),
@@ -186,6 +197,7 @@ async function pushToManualSourcing(
   runId: string,
   opp: ProductOpportunity,
   note: string,
+  status: SourcingStatus = "MANUAL_REQUIRED",
 ): Promise<void> {
   try {
     const { data: existing } = await supabase
@@ -205,7 +217,7 @@ async function pushToManualSourcing(
       suggested_search_keywords: opp.search_keywords ?? [],
       content_angle: opp.expected_content_angle ?? null,
       priority: opp.priority ?? null,
-      status: "NEW",
+      status,
       notes: note.slice(0, 300),
     });
   } catch {
@@ -226,7 +238,6 @@ async function pickRun(supabase: SupabaseClient, campaignRunId?: string): Promis
     "CREATING_PRODUCTS",
     "CREATING_POSTS",
     "CREATING_CREATIVES",
-    "WAITING_POST_REVIEW",
     "SCHEDULING",
     "SCHEDULED",
     "RUNNING",
@@ -298,6 +309,18 @@ export async function runCampaignAutopilotStep(input: AutopilotStepInput): Promi
     summary.status = (after as { status: CampaignRunStatus }).status;
     summary.current_step = (after as { current_step: string | null }).current_step;
   }
+  const autoStopped =
+    summary.status === "WAITING_APPROVAL" ||
+    summary.status === "WAITING_POST_REVIEW" ||
+    summary.status === "PAUSED" ||
+    summary.status === "COMPLETED" ||
+    summary.status === "FAILED";
+  await patchRun(supabase, run.id, {
+    last_auto_run_at: nowIso(),
+    next_auto_run_at: autoStopped ? null : new Date(Date.now() + (summary.ok ? AUTO_NEXT_DELAY_MS : AUTO_RETRY_DELAY_MS)).toISOString(),
+    automation_error: summary.ok ? null : summary.errors.join("; ").slice(0, 800),
+    automation_attempts: run.automation_attempts + 1,
+  });
   await insertPostingLog(supabase, null, LOG.BATCH_FINISHED, "SUCCESS", `Autopilot batch xong @ ${summary.status}.`, {
     ai_campaign_run_id: run.id,
     sourced: summary.products_sourced,
@@ -420,7 +443,7 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
     if (!res.configured) {
       providerMissing = true;
       lastError = res.error;
-      await pushToManualSourcing(supabase, run.id, opp, `Chưa cấu hình provider tìm sản phẩm: ${res.error ?? ""}`);
+      await pushToManualSourcing(supabase, run.id, opp, `Chưa cấu hình provider tìm sản phẩm: ${res.error ?? ""}`, "PROVIDER_MISSING");
       candidates.push(makeCandidate(opp, idx, null, "NEEDS_PROVIDER"));
       diagnostics.push(makeDiagnostic(opp, idx, queries, 0, 0, {}, [], [], res.provider, `Chưa cấu hình provider: ${res.error ?? ""}`));
       continue;
@@ -465,7 +488,7 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
       c.rejected_reason = "LOW_RELEVANCE";
       candidates.push(c);
       const suggestions = suggestSpecificKeywords(opp);
-      await pushToManualSourcing(supabase, run.id, opp, `Không tìm thấy sản phẩm đủ liên quan (raw ${rawItems.length}). Gợi ý từ khóa: ${suggestions.join(", ")}`);
+      await pushToManualSourcing(supabase, run.id, opp, `Không tìm thấy sản phẩm đủ liên quan (raw ${rawItems.length}). Gợi ý từ khóa: ${suggestions.join(", ")}`, "MANUAL_REQUIRED");
       diagnostics.push(
         makeDiagnostic(
           opp,
@@ -486,7 +509,7 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
   if (providerMissing) {
     const stillTodo = opportunities.map((opp, idx) => ({ opp, idx })).filter(({ idx }) => !candidates.some((c) => c.opportunity_index === idx));
     for (const { opp, idx } of stillTodo) {
-      await pushToManualSourcing(supabase, run.id, opp, "Chưa cấu hình provider tìm sản phẩm.");
+      await pushToManualSourcing(supabase, run.id, opp, "Chưa cấu hình provider tìm sản phẩm.", "PROVIDER_MISSING");
       candidates.push(makeCandidate(opp, idx, null, "NEEDS_PROVIDER"));
       diagnostics.push(makeDiagnostic(opp, idx, [], 0, 0, {}, [], [], "none", "Chưa cấu hình provider tìm sản phẩm."));
     }
@@ -634,10 +657,10 @@ async function stepConvert(supabase: SupabaseClient, run: AiCampaignRun, summary
     } else if (!res.configured) {
       providerMissing = true;
       target.link_status = "NEEDS_PROVIDER";
-      await pushToManualSourcing(supabase, run.id, opportunityFor(run, cand), `Chưa cấu hình chuyển link: ${res.error ?? ""}`);
+      await pushToManualSourcing(supabase, run.id, opportunityFor(run, cand), `Chưa cấu hình chuyển link: ${res.error ?? ""}`, "PROVIDER_MISSING");
     } else {
       target.link_status = "LINK_CONVERSION_FAILED";
-      await pushToManualSourcing(supabase, run.id, opportunityFor(run, cand), `Chuyển link thất bại: ${res.error ?? ""}`);
+      await pushToManualSourcing(supabase, run.id, opportunityFor(run, cand), `Chuyển link thất bại: ${res.error ?? ""}`, "LINK_CONVERSION_FAILED");
     }
   }
 
@@ -779,6 +802,12 @@ async function productsNeedingJobs(supabase: SupabaseClient, run: AiCampaignRun)
       .filter((j) => j.related_product_id)
       .map((j) => j.related_product_id as string),
   );
+  if (haveJob.size > 0) {
+    await insertPostingLog(supabase, null, LOG.CONTINUED_JOB, "SUCCESS", `Tiếp tục dùng ${haveJob.size} job AI đã tồn tại, không tạo trùng.`, {
+      ai_campaign_run_id: run.id,
+      existing_jobs: haveJob.size,
+    });
+  }
   return productIds.filter((id) => !haveJob.has(id));
 }
 

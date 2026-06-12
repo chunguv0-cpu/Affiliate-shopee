@@ -12,7 +12,11 @@ import { SOURCING_STATUS_LABELS, type SourcingCandidate, type SourcingStatus } f
 
 const STATUS_STYLES: Record<SourcingStatus, string> = {
   NEW: "bg-gray-100 text-gray-600",
+  NEEDS_LINK: "bg-amber-50 text-amber-700",
   SOURCING: "bg-amber-50 text-amber-700",
+  PROVIDER_MISSING: "bg-orange-50 text-orange-700",
+  LINK_CONVERSION_FAILED: "bg-red-50 text-red-700",
+  MANUAL_REQUIRED: "bg-purple-50 text-purple-700",
   LINK_READY: "bg-blue-50 text-blue-700",
   IMPORTED: "bg-green-50 text-green-700",
   REJECTED: "bg-red-50 text-red-700",

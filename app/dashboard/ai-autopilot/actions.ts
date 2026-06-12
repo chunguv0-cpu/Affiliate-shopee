@@ -14,7 +14,7 @@ import type { AiCampaignRun, CampaignRunCounters } from "@/lib/types";
 
 const PATH = "/dashboard/ai-autopilot";
 
-export type SimpleResult = { ok: true } | { ok: false; error: string };
+export type SimpleResult = { ok: true; message?: string } | { ok: false; error: string };
 export type CreatePlanResult = { ok: true; id: string } | { ok: false; error: string };
 
 function text(fd: FormData, key: string): string | null {
@@ -76,6 +76,8 @@ export async function createCampaignPlanAction(fd: FormData): Promise<CreatePlan
   const postsPerDay = intField(fd, "posts_per_day", 2, 1, 10);
   const priorityGroup = text(fd, "priority_group");
   const targetCustomer = text(fd, "target_customer");
+  const preferredPriceRange = text(fd, "preferred_price_range");
+  const avoidProducts = text(fd, "avoid_products");
 
   try {
     const supabase = createSupabaseAdminClient();
@@ -102,6 +104,8 @@ export async function createCampaignPlanAction(fd: FormData): Promise<CreatePlan
       posts_per_day: postsPerDay,
       priority_group: priorityGroup,
       target_customer: targetCustomer,
+      preferred_price_range: preferredPriceRange,
+      avoid_products: avoidProducts,
       excluded_recent_products: novelty.excluded,
       already_used_categories: novelty.usedCategories,
     });
@@ -117,13 +121,19 @@ export async function createCampaignPlanAction(fd: FormData): Promise<CreatePlan
           campaign_goal: plan.campaign_goal,
           target_customers: plan.target_customers,
           content_angles: plan.content_angles,
+          preferred_price_range: preferredPriceRange,
+          avoid_products: avoidProducts,
         },
         product_opportunities: plan.product_opportunities,
         posting_plan: plan.posting_plan,
         creative_direction: plan.creative_direction,
+        budget_note: preferredPriceRange,
         current_step: "WAITING_APPROVAL",
         progress_total: plan.product_opportunities.length,
         progress_current: 0,
+        is_autopilot_enabled: false,
+        next_auto_run_at: null,
+        automation_error: null,
       })
       .select("id")
       .single();
@@ -213,22 +223,28 @@ export async function approveCampaignRun(id: string): Promise<SimpleResult> {
   if (!id) return { ok: false, error: "Thiếu mã chiến dịch." };
   try {
     const supabase = createSupabaseAdminClient();
+    const now = new Date().toISOString();
     const { error } = await supabase
       .from("ai_campaign_runs")
       .update({
         status: "APPROVED",
-        approved_at: new Date().toISOString(),
+        approved_at: now,
         current_step: "SOURCING_PRODUCTS",
+        is_autopilot_enabled: true,
+        auto_started_at: now,
+        next_auto_run_at: now,
+        automation_error: null,
+        automation_attempts: 0,
         paused: false,
         error_message: null,
-        updated_at: new Date().toISOString(),
+        updated_at: now,
       })
       .eq("id", id)
       .eq("status", "WAITING_APPROVAL");
     if (error) return { ok: false, error: `Duyệt thất bại: ${error.message}` };
     await insertPostingLog(supabase, null, "AI_CAMPAIGN_APPROVED", "SUCCESS", "Duyệt chiến dịch autopilot.", { ai_campaign_run_id: id });
     revalidatePath(PATH);
-    return { ok: true };
+    return { ok: true, message: "Autopilot đã bật. Hệ thống sẽ tự chạy theo batch nhỏ qua cron. Bạn không cần bấm từng bước." };
   } catch (err) {
     const m = err instanceof Error ? err.message : "Lỗi không xác định.";
     return { ok: false, error: `Duyệt thất bại: ${m}` };
@@ -276,7 +292,17 @@ async function setPaused(id: string, paused: boolean): Promise<SimpleResult> {
   if (!id) return { ok: false, error: "Thiếu mã chiến dịch." };
   try {
     const supabase = createSupabaseAdminClient();
-    await supabase.from("ai_campaign_runs").update({ paused, updated_at: new Date().toISOString() }).eq("id", id);
+    const now = new Date().toISOString();
+    await supabase
+      .from("ai_campaign_runs")
+      .update({
+        paused,
+        is_autopilot_enabled: !paused,
+        next_auto_run_at: paused ? null : now,
+        automation_error: null,
+        updated_at: now,
+      })
+      .eq("id", id);
     revalidatePath(PATH);
     return { ok: true };
   } catch (err) {

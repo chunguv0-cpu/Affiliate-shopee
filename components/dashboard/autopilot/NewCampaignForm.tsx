@@ -54,6 +54,14 @@ export default function NewCampaignForm() {
           <span className="mb-1 block font-medium text-gray-700">Tệp khách hàng (tùy chọn)</span>
           <input name="target_customer" placeholder="VD: Mẹ bỉm, nội trợ 25-40 tuổi" className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
         </label>
+        <label className="text-sm">
+          <span className="mb-1 block font-medium text-gray-700">Mức giá mong muốn (tùy chọn)</span>
+          <input name="preferred_price_range" placeholder="VD: dưới 200k, dễ ra đơn" className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block font-medium text-gray-700">Loại sản phẩm muốn tránh (tùy chọn)</span>
+          <input name="avoid_products" placeholder="VD: mỹ phẩm, thời trang nữ, phụ kiện nail" className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+        </label>
       </div>
       <div className="mt-3 flex items-center gap-3">
         <button

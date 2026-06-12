@@ -374,7 +374,17 @@ create table if not exists sourcing_candidates (
   created_at                timestamptz not null default now(),
   updated_at                timestamptz not null default now(),
   constraint sourcing_candidates_status_check
-    check (status in ('NEW', 'SOURCING', 'LINK_READY', 'IMPORTED', 'REJECTED'))
+    check (status in (
+      'NEW',
+      'NEEDS_LINK',
+      'SOURCING',
+      'PROVIDER_MISSING',
+      'LINK_CONVERSION_FAILED',
+      'MANUAL_REQUIRED',
+      'LINK_READY',
+      'IMPORTED',
+      'REJECTED'
+    ))
 );
 
 create index if not exists idx_sourcing_status         on sourcing_candidates (status);
@@ -478,6 +488,12 @@ create table if not exists ai_campaign_runs (
   progress_current     integer not null default 0,
   progress_total       integer not null default 0,
   paused               boolean not null default false,
+  is_autopilot_enabled boolean not null default true,
+  auto_started_at      timestamptz,
+  last_auto_run_at     timestamptz,
+  next_auto_run_at     timestamptz,
+  automation_error     text,
+  automation_attempts  integer not null default 0,
   -- Phase 20: chẩn đoán sourcing (query, raw/accepted/rejected, lý do loại).
   sourcing_diagnostics jsonb default '[]'::jsonb,
   created_at           timestamptz not null default now(),
@@ -492,6 +508,10 @@ create table if not exists ai_campaign_runs (
 
 create index if not exists idx_ai_campaign_runs_status     on ai_campaign_runs (status);
 create index if not exists idx_ai_campaign_runs_created_at  on ai_campaign_runs (created_at desc);
+create index if not exists idx_ai_campaign_runs_autopilot_enabled on ai_campaign_runs (is_autopilot_enabled, status, next_auto_run_at);
+
+alter table post_creative_assets add column if not exists ai_campaign_run_id uuid references ai_campaign_runs (id) on delete set null;
+create index if not exists idx_pca_campaign_run on post_creative_assets (ai_campaign_run_id);
 
 drop trigger if exists trg_ai_campaign_runs_updated_at on ai_campaign_runs;
 create trigger trg_ai_campaign_runs_updated_at

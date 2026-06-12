@@ -17,6 +17,8 @@ export type CampaignPlanInput = {
   posts_per_day: number;
   priority_group?: string | null;
   target_customer?: string | null;
+  preferred_price_range?: string | null;
+  avoid_products?: string | null;
   /** Phase 20 — tránh lặp sản phẩm/nhóm đã dùng gần đây. */
   excluded_recent_products?: string[];
   already_used_categories?: string[];
@@ -88,13 +90,15 @@ function buildUserPrompt(input: CampaignPlanInput): string {
     `Số bài/ngày: ${input.posts_per_day}`,
     input.priority_group ? `Nhóm sản phẩm ưu tiên: ${input.priority_group}` : "Nhóm sản phẩm ưu tiên: (không chỉ định, hãy tự chọn ngách tốt)",
     input.target_customer ? `Tệp khách hàng: ${input.target_customer}` : "Tệp khách hàng: (tự xác định)",
+    input.preferred_price_range ? `Mức giá mong muốn: ${input.preferred_price_range}` : "Mức giá mong muốn: (linh hoạt theo sản phẩm)",
+    input.avoid_products ? `Loại sản phẩm muốn tránh: ${input.avoid_products}` : "Loại sản phẩm muốn tránh: (không chỉ định)",
     "",
     excluded.length > 0
       ? `Sản phẩm/ý tưởng ĐÃ DÙNG gần đây (TRÁNH lặp lại): ${excluded.join("; ")}`
       : "Sản phẩm đã dùng gần đây: (chưa có)",
     usedCats.length > 0 ? `Nhóm hàng đã khai thác nhiều: ${usedCats.join("; ")}` : "Nhóm hàng đã khai thác: (chưa có)",
     "",
-    "Hãy đề xuất các cơ hội sản phẩm MỚI, CỤ THỂ (khác danh sách đã dùng). Trả về JSON theo đúng cấu trúc.",
+    "Hãy đề xuất các cơ hội sản phẩm MỚI, CỤ THỂ (khác danh sách đã dùng), tôn trọng mức giá mong muốn và loại sản phẩm cần tránh. Trả về JSON theo đúng cấu trúc.",
   ].join("\n");
 }
 

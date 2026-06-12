@@ -72,11 +72,24 @@ export const PRODUCT_STATUS_LABELS: Record<ProductStatus, string> = {
 // ===========================================================================
 // Phase 14 — Sourcing Workflow
 // ===========================================================================
-export type SourcingStatus = "NEW" | "SOURCING" | "LINK_READY" | "IMPORTED" | "REJECTED";
+export type SourcingStatus =
+  | "NEW"
+  | "NEEDS_LINK"
+  | "SOURCING"
+  | "PROVIDER_MISSING"
+  | "LINK_CONVERSION_FAILED"
+  | "MANUAL_REQUIRED"
+  | "LINK_READY"
+  | "IMPORTED"
+  | "REJECTED";
 
 export const SOURCING_STATUS_LABELS: Record<SourcingStatus, string> = {
   NEW: "Mới",
+  NEEDS_LINK: "Cần tìm link",
   SOURCING: "Đang tìm",
+  PROVIDER_MISSING: "Thiếu provider",
+  LINK_CONVERSION_FAILED: "Chuyển link lỗi",
+  MANUAL_REQUIRED: "Cần xử lý tay",
   LINK_READY: "Đã có link",
   IMPORTED: "Đã import",
   REJECTED: "Bỏ qua",
@@ -542,6 +555,12 @@ export type AiCampaignRun = {
   current_step: string | null;
   progress_current: number;
   progress_total: number;
+  is_autopilot_enabled: boolean;
+  auto_started_at: string | null;
+  last_auto_run_at: string | null;
+  next_auto_run_at: string | null;
+  automation_error: string | null;
+  automation_attempts: number;
   paused: boolean;
   created_at: string;
   updated_at: string;
