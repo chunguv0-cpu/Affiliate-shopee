@@ -76,9 +76,10 @@ function parseProxy(raw) {
 const PROXY_CONFIG = parseProxy(process.env.GROK_PROXY);
 
 // Selector — CHỈNH theo giao diện grok.com hiện tại.
-const SEL_PROMPT = process.env.GROK_PROMPT_SELECTOR || 'textarea';
-const SEL_SUBMIT = process.env.GROK_SUBMIT_SELECTOR || 'button[type="submit"]';
-const SEL_IMAGE = process.env.GROK_IMAGE_SELECTOR || 'img[src^="https"]';
+const SEL_PROMPT = process.env.GROK_PROMPT_SELECTOR || 'textarea, [contenteditable="true"], div[role="textbox"]';
+const SEL_SUBMIT = process.env.GROK_SUBMIT_SELECTOR || 'button[type="submit"], button[aria-label*="end" i], button[data-testid*="send" i]';
+const MIN_IMAGE_PX = Number(process.env.GROK_MIN_IMAGE_PX || 480);
+const PROMPT_PREFIX = process.env.GROK_PROMPT_PREFIX ?? "Generate an image (no text, no words in the image): ";
 
 const COOKIE_DOMAIN = (process.env.GROK_COOKIE_DOMAIN || ".grok.com").trim();
 
@@ -185,31 +186,55 @@ async function generateImage(prompt) {
     page.setDefaultTimeout(NAV_TIMEOUT);
     await page.goto(GROK_URL, { waitUntil: "domcontentloaded" });
 
-    // TODO: chỉnh các bước này theo UI Grok hiện tại.
-    const promptBox = page.locator(SEL_PROMPT).first();
+    // Tìm ô nhập: textarea/input HOẶC contenteditable.
+    const box = page.locator(SEL_PROMPT).first();
     try {
-      await promptBox.waitFor({ state: "visible", timeout: NAV_TIMEOUT });
+      await box.waitFor({ state: "visible", timeout: NAV_TIMEOUT });
     } catch {
       const d = await dumpDebug(page, "Không thấy ô nhập prompt (sai GROK_PROMPT_SELECTOR, hoặc bị Cloudflare/đăng nhập)");
-      return { error: `Không thấy ô nhập prompt. Trang hiện tại: ${d.title || d.url}. Xem last-error.png.` };
+      return { error: `Không thấy ô nhập. Trang: ${d.title || d.url}. Xem last-error.png.` };
     }
-    await promptBox.fill(prompt);
 
-    // Gửi: thử nút submit, nếu không có thì Enter.
+    // Ghi nhớ ảnh hiện có để phát hiện ảnh MỚI sau khi gửi.
+    const before = await page.evaluate(() => Array.from(document.images).map((i) => i.currentSrc || i.src));
+
+    // Nhập prompt (fill cho textarea/input, gõ phím cho contenteditable).
+    const full = `${PROMPT_PREFIX}${prompt}`;
+    const tag = await box.evaluate((el) => el.tagName.toLowerCase()).catch(() => "");
+    if (tag === "textarea" || tag === "input") {
+      await box.fill(full);
+    } else {
+      await box.click();
+      await page.keyboard.type(full, { delay: 5 });
+    }
+
+    // Gửi: nút submit nếu có, không thì Enter.
     const submit = page.locator(SEL_SUBMIT).first();
-    if (await submit.count()) await submit.click().catch(() => promptBox.press("Enter"));
-    else await promptBox.press("Enter");
+    if (await submit.count().catch(() => 0)) await submit.click().catch(() => box.press("Enter"));
+    else await box.press("Enter");
 
-    // Chờ ảnh kết quả xuất hiện.
-    const img = page.locator(SEL_IMAGE).last();
+    // Chờ 1 ảnh MỚI, đủ lớn xuất hiện (ảnh sinh ra, không phải logo/avatar/icon).
+    let src = null;
     try {
-      await img.waitFor({ state: "visible", timeout: GEN_TIMEOUT });
+      const handle = await page.waitForFunction(
+        ({ prev, minPx }) => {
+          const found = Array.from(document.images)
+            .filter((i) => (i.naturalWidth >= minPx || i.width >= minPx * 0.8) && i.src && i.src.startsWith("http"))
+            .map((i) => i.currentSrc || i.src)
+            .filter((s) => !prev.includes(s));
+          return found[0] || null;
+        },
+        { prev: before, minPx: MIN_IMAGE_PX },
+        { timeout: GEN_TIMEOUT, polling: 1000 },
+      );
+      src = await handle.jsonValue();
     } catch {
-      const d = await dumpDebug(page, "Không thấy ảnh kết quả (sai GROK_IMAGE_SELECTOR hoặc Grok không trả ảnh)");
-      return { error: `Không thấy ảnh kết quả. Trang: ${d.title || d.url}. Xem last-error.png.` };
+      src = null;
     }
-    const src = await img.getAttribute("src");
-    if (!src) return { error: "Ảnh kết quả không có src (chỉnh GROK_IMAGE_SELECTOR)." };
+    if (!src) {
+      const d = await dumpDebug(page, "Không thấy ảnh mới đủ lớn (Grok có thể trả text, hoặc cần chỉnh prompt/selector)");
+      return { error: `Grok chưa trả ảnh. Trang: ${d.title || d.url}. Xem last-error.png.` };
+    }
 
     // Tải ảnh về dạng base64 (qua chính phiên đăng nhập).
     const resp = await context.request.get(src);
