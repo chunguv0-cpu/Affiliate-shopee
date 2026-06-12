@@ -45,6 +45,28 @@ function readIntEnv(name: string, fallback: number, min: number, max: number): n
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 }
 
+type CronRunRow = {
+  id: string;
+  next_auto_run_at?: string | null;
+  last_cron_hit_at?: string | null;
+  is_autopilot_enabled?: boolean | null;
+  cron_run_count?: number | null;
+};
+
+function timeValue(iso: string | null | undefined): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function compareDueCampaigns(a: CronRunRow, b: CronRunRow): number {
+  return (
+    timeValue(a.next_auto_run_at) - timeValue(b.next_auto_run_at) ||
+    timeValue(a.last_cron_hit_at) - timeValue(b.last_cron_hit_at) ||
+    (a.cron_run_count ?? 0) - (b.cron_run_count ?? 0)
+  );
+}
+
 /**
  * Cron Autopilot: tìm các chiến dịch đang chạy, xử lý GIỚI HẠN batch/bước.
  * Bảo vệ bằng Bearer CRON_SECRET.
@@ -62,17 +84,18 @@ async function handle(request: Request) {
     const nowIso = new Date().toISOString();
     const { data, error } = await supabase
       .from("ai_campaign_runs")
-      .select("id, next_auto_run_at, is_autopilot_enabled, cron_run_count")
+      .select("id, next_auto_run_at, last_cron_hit_at, is_autopilot_enabled, cron_run_count")
       .in("status", ACTIVE_STATUSES)
       .eq("paused", false)
-      .order("updated_at", { ascending: true })
-      .limit(maxRuns * 5);
+      .order("next_auto_run_at", { ascending: true })
+      .limit(Math.max(50, maxRuns * 10));
     if (error) {
       return NextResponse.json({ ok: false, error: `Không tải được campaign autopilot: ${error.message}` }, { status: 500 });
     }
-    const runRows = ((data ?? []) as Array<{ id: string; next_auto_run_at?: string | null; is_autopilot_enabled?: boolean | null; cron_run_count?: number | null }>)
+    const runRows = ((data ?? []) as CronRunRow[])
       .filter((r) => r.is_autopilot_enabled !== false)
       .filter((r) => !r.next_auto_run_at || r.next_auto_run_at <= nowIso)
+      .sort(compareDueCampaigns)
       .slice(0, maxRuns);
 
     const results: AutopilotLoopSummary[] = [];

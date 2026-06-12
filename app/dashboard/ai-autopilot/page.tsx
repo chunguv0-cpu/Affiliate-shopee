@@ -185,11 +185,19 @@ export default async function AiAutopilotPage() {
             Number.isFinite(lastCronMsForRun) &&
             Number.isFinite(nextAutoMsForRun) &&
             nextAutoMsForRun > nowMs;
+          const runWaitingForTurn =
+            CRON_ACTIVE_STATUSES.includes(run.status) &&
+            run.is_autopilot_enabled &&
+            !run.paused &&
+            !runWaitingForNextCron &&
+            hasRecentCronHit &&
+            (!Number.isFinite(lastCronMsForRun) || nowMs - lastCronMsForRun > 5 * 60 * 1000);
           const runCronStale =
             CRON_ACTIVE_STATUSES.includes(run.status) &&
             run.is_autopilot_enabled &&
             !run.paused &&
             !runWaitingForNextCron &&
+            !runWaitingForTurn &&
             (!Number.isFinite(lastCronMsForRun) || nowMs - lastCronMsForRun > 5 * 60 * 1000);
           return (
             <div key={run.id} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -273,6 +281,12 @@ export default async function AiAutopilotPage() {
               {runWaitingForNextCron ? (
                 <p className="mt-2 rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-700">
                   Cron da chay va dang cho batch tiep theo o moc Next auto run.
+                </p>
+              ) : null}
+
+              {runWaitingForTurn ? (
+                <p className="mt-2 rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  Cron dang chay. Chien dich nay dang cho toi luot batch tiep theo.
                 </p>
               ) : null}
 
