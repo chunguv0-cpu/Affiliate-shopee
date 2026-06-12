@@ -25,8 +25,11 @@ function checkAuth(request: Request): NextResponse | null {
     );
   }
 
-  const auth = request.headers.get("authorization");
-  if (auth !== `Bearer ${cronSecret}`) {
+  const auth = request.headers.get("authorization")?.trim();
+  const headerSecret = request.headers.get("x-cron-secret")?.trim();
+  const querySecret = new URL(request.url).searchParams.get("secret")?.trim();
+  const ok = auth === `Bearer ${cronSecret}` || headerSecret === cronSecret || querySecret === cronSecret;
+  if (!ok) {
     return NextResponse.json(
       { ok: false, error: "Unauthorized" },
       { status: 401 },
