@@ -11,6 +11,7 @@ import {
 import {
   expandQueries,
   inferCategoryProfile,
+  isBroadOpportunity,
   normalizeText,
   REJECTION_REASON_LABELS,
   scoreRelevance,
@@ -81,6 +82,8 @@ const LOG = {
 
 const AUTO_NEXT_DELAY_MS = 60_000;
 const AUTO_RETRY_DELAY_MS = 5 * 60_000;
+const DEFAULT_MICRO_STEPS_PER_RUN = readIntEnv("MAX_MICRO_STEPS_PER_CRON_RUN", 6, 1, 20);
+const DEFAULT_SECONDS_PER_RUN = readIntEnv("MAX_SECONDS_PER_CRON_RUN", 40, 5, 55);
 
 export type AutopilotStepInput = {
   campaignRunId?: string;
@@ -106,6 +109,18 @@ export type AutopilotSummary = {
   message: string;
 };
 
+export type AutopilotLoopInput = AutopilotStepInput & {
+  maxMicroSteps?: number;
+  maxSeconds?: number;
+};
+
+export type AutopilotLoopSummary = AutopilotSummary & {
+  micro_steps: number;
+  budget_exhausted: boolean;
+  stopped_reason: string;
+  step_summaries: AutopilotSummary[];
+};
+
 function emptySummary(runId: string | null): AutopilotSummary {
   return {
     ok: true,
@@ -124,6 +139,49 @@ function emptySummary(runId: string | null): AutopilotSummary {
     errors: [],
     message: "",
   };
+}
+
+function emptyLoopSummary(runId: string | null): AutopilotLoopSummary {
+  return {
+    ...emptySummary(runId),
+    micro_steps: 0,
+    budget_exhausted: false,
+    stopped_reason: "",
+    step_summaries: [],
+  };
+}
+
+function mergeStepIntoLoop(loop: AutopilotLoopSummary, step: AutopilotSummary): void {
+  loop.ok = loop.ok && step.ok;
+  loop.campaign_run_id = step.campaign_run_id ?? loop.campaign_run_id;
+  loop.status = step.status;
+  loop.current_step = step.current_step;
+  loop.products_sourced += step.products_sourced;
+  loop.links_converted += step.links_converted;
+  loop.products_created += step.products_created;
+  loop.posts_created += step.posts_created;
+  loop.creative_jobs_started += step.creative_jobs_started;
+  loop.creative_job_steps_processed += step.creative_job_steps_processed;
+  loop.posts_ready_for_review = Math.max(loop.posts_ready_for_review, step.posts_ready_for_review);
+  loop.scheduled_count += step.scheduled_count;
+  loop.skipped_count += step.skipped_count;
+  loop.errors.push(...step.errors);
+  loop.message = step.message;
+  loop.step_summaries.push(step);
+}
+
+function isBlockedStatus(status: CampaignRunStatus | null): boolean {
+  return (
+    status === "WAITING_APPROVAL" ||
+    status === "WAITING_POST_REVIEW" ||
+    status === "PAUSED" ||
+    status === "COMPLETED" ||
+    status === "FAILED"
+  );
+}
+
+function canAutoContinue(status: CampaignRunStatus | null): boolean {
+  return !!status && !isBlockedStatus(status) && status !== "DRAFT" && status !== "AI_PLANNING";
 }
 
 function nowIso(): string {
@@ -161,6 +219,9 @@ export function parseCampaignRunRow(row: Record<string, unknown>): AiCampaignRun
     auto_started_at: (row.auto_started_at as string | null) ?? null,
     last_auto_run_at: (row.last_auto_run_at as string | null) ?? null,
     next_auto_run_at: (row.next_auto_run_at as string | null) ?? null,
+    last_cron_hit_at: (row.last_cron_hit_at as string | null) ?? null,
+    last_cron_result: row.last_cron_result ?? null,
+    cron_run_count: Number(row.cron_run_count) || 0,
     automation_error: (row.automation_error as string | null) ?? null,
     automation_attempts: Number(row.automation_attempts) || 0,
     paused: Boolean(row.paused),
@@ -333,6 +394,56 @@ export async function runCampaignAutopilotStep(input: AutopilotStepInput): Promi
   return summary;
 }
 
+/**
+ * Chạy nhiều micro-step an toàn trong một request cron/manual debug.
+ * Cron vẫn gọi theo batch nhỏ, nhưng không dừng sau một chuyển trạng thái tầm thường.
+ */
+export async function runCampaignAutopilotUntilBlocked(input: AutopilotLoopInput): Promise<AutopilotLoopSummary> {
+  const maxMicroSteps = Math.max(1, Math.min(20, input.maxMicroSteps ?? DEFAULT_MICRO_STEPS_PER_RUN));
+  const maxMs = Math.max(5, Math.min(55, input.maxSeconds ?? DEFAULT_SECONDS_PER_RUN)) * 1000;
+  const started = Date.now();
+  let runId = input.campaignRunId;
+  const loop = emptyLoopSummary(runId ?? null);
+
+  for (let i = 0; i < maxMicroSteps; i += 1) {
+    if (Date.now() - started > maxMs) {
+      loop.budget_exhausted = true;
+      loop.stopped_reason = "time_budget_exhausted";
+      break;
+    }
+
+    const step = await runCampaignAutopilotStep({ ...input, campaignRunId: runId });
+    loop.micro_steps += 1;
+    mergeStepIntoLoop(loop, step);
+    runId = step.campaign_run_id ?? runId;
+
+    if (!step.campaign_run_id) {
+      loop.stopped_reason = "no_campaign";
+      break;
+    }
+    if (!step.ok) {
+      loop.stopped_reason = "step_error";
+      break;
+    }
+    if (isBlockedStatus(step.status)) {
+      loop.stopped_reason = `blocked:${step.status}`;
+      break;
+    }
+    if (!canAutoContinue(step.status)) {
+      loop.stopped_reason = `no_auto_action:${step.status ?? "unknown"}`;
+      break;
+    }
+    if (i === maxMicroSteps - 1) {
+      loop.budget_exhausted = true;
+      loop.stopped_reason = "micro_step_budget_exhausted";
+    }
+  }
+
+  if (!loop.stopped_reason) loop.stopped_reason = "completed_budget";
+  loop.message = `${loop.message || "Đã chạy autopilot."} (${loop.micro_steps} micro-step, dừng: ${loop.stopped_reason})`;
+  return loop;
+}
+
 async function dispatchStep(supabase: SupabaseClient, run: AiCampaignRun, summary: AutopilotSummary): Promise<void> {
   switch (run.status) {
     case "APPROVED":
@@ -445,24 +556,31 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
       lastError = res.error;
       await pushToManualSourcing(supabase, run.id, opp, `Chưa cấu hình provider tìm sản phẩm: ${res.error ?? ""}`, "PROVIDER_MISSING");
       candidates.push(makeCandidate(opp, idx, null, "NEEDS_PROVIDER"));
-      diagnostics.push(makeDiagnostic(opp, idx, queries, 0, 0, {}, [], [], res.provider, `Chưa cấu hình provider: ${res.error ?? ""}`));
+      diagnostics.push(makeDiagnostic(opp, idx, queries, 0, 0, {}, [], [], [], res.provider, `Chưa cấu hình provider: ${res.error ?? ""}`));
       continue;
     }
 
     const rawItems = res.results;
     const rejectionReasons: Record<string, number> = {};
+    const negativeHits = new Set<string>();
     const rejectedExamples: string[] = [];
     const accepted: Array<{ item: SourcingSearchItem; score: number; reason: string }> = [];
 
     for (const item of rawItems) {
       const dup = isDuplicateRecent(item, seen);
-      const verdict = scoreRelevance(item, opp, profile, { requireImage: true, isDuplicateRecent: dup, allowRepeat: ALLOW_REPEAT_PRODUCTS });
+      const verdict = scoreRelevance(item, opp, profile, {
+        requireImage: true,
+        isDuplicateRecent: dup,
+        allowRepeat: ALLOW_REPEAT_PRODUCTS,
+        minScore: isBroadOpportunity(opp) ? 70 : undefined,
+      });
       if (verdict.accepted) {
         accepted.push({ item, score: verdict.score, reason: verdict.accepted_reason ?? "" });
       } else {
         const reason = (verdict.rejected_reason ?? "LOW_RELEVANCE") as RejectionReason;
         rejectionReasons[reason] = (rejectionReasons[reason] ?? 0) + 1;
-        if (rejectedExamples.length < 4) rejectedExamples.push(`${item.product_name} (${REJECTION_REASON_LABELS[reason]})`);
+        if (verdict.negative_hit) negativeHits.add(verdict.negative_hit);
+        if (rejectedExamples.length < 4) rejectedExamples.push(`${item.product_name} (${REJECTION_REASON_LABELS[reason]}, score ${verdict.score})`);
       }
     }
 
@@ -480,7 +598,7 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
       candidates.push(cand);
       summary.products_sourced += 1;
       diagnostics.push(
-        makeDiagnostic(opp, idx, queries, rawItems.length, accepted.length, rejectionReasons, topAccepted, rejectedExamples, res.provider, `Chấp nhận: ${chosen.item.product_name} (score ${chosen.score}).`),
+        makeDiagnostic(opp, idx, queries, rawItems.length, accepted.length, rejectionReasons, Array.from(negativeHits), topAccepted, rejectedExamples, res.provider, `Chấp nhận: ${chosen.item.product_name} (score ${chosen.score}).`),
       );
     } else {
       // accepted_count = 0 -> KHÔNG dùng sản phẩm xấu.
@@ -497,6 +615,7 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
           rawItems.length,
           0,
           rejectionReasons,
+          Array.from(negativeHits),
           [],
           rejectedExamples,
           res.provider,
@@ -511,7 +630,7 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
     for (const { opp, idx } of stillTodo) {
       await pushToManualSourcing(supabase, run.id, opp, "Chưa cấu hình provider tìm sản phẩm.", "PROVIDER_MISSING");
       candidates.push(makeCandidate(opp, idx, null, "NEEDS_PROVIDER"));
-      diagnostics.push(makeDiagnostic(opp, idx, [], 0, 0, {}, [], [], "none", "Chưa cấu hình provider tìm sản phẩm."));
+      diagnostics.push(makeDiagnostic(opp, idx, [], 0, 0, {}, [], [], [], "none", "Chưa cấu hình provider tìm sản phẩm."));
     }
   }
 
@@ -528,8 +647,26 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
     await insertPostingLog(supabase, null, LOG.FAILED_NON_RECOVERABLE, "FAILED", patch.error_message as string, { ai_campaign_run_id: run.id });
   }
   if (allAttempted) {
-    patch.status = "CONVERTING_LINKS";
-    patch.current_step = "CONVERTING_LINKS";
+    const acceptedTotal = candidates.filter((c) => c.link_status === "SOURCED" || c.link_status === "READY" || !!c.product_id).length;
+    if (acceptedTotal === 0) {
+      const topRejected = diagnostics.flatMap((d) => d.top_rejected_examples ?? []).slice(0, 8).join("; ");
+      const noRelevantMessage =
+        typeof patch.error_message === "string"
+          ? patch.error_message
+          : "Không có sản phẩm nào đạt điểm liên quan. Hãy dùng từ khóa cụ thể hơn hoặc chỉnh nhóm sản phẩm." +
+            (topRejected ? ` Ví dụ bị loại: ${topRejected}` : "");
+      patch.status = "FAILED";
+      patch.current_step = "FAILED";
+      patch.error_message = noRelevantMessage;
+      patch.automation_error = noRelevantMessage;
+      patch.next_auto_run_at = null;
+      summary.ok = false;
+      summary.errors.push(noRelevantMessage);
+      await insertPostingLog(supabase, null, LOG.FAILED_NON_RECOVERABLE, "FAILED", noRelevantMessage, { ai_campaign_run_id: run.id });
+    } else {
+      patch.status = "CONVERTING_LINKS";
+      patch.current_step = "CONVERTING_LINKS";
+    }
   }
   await patchRun(supabase, run.id, patch);
   await insertPostingLog(supabase, null, LOG.SOURCING_DONE, "SUCCESS", `Sourced ${summary.products_sourced} sản phẩm đạt chuẩn (batch).`, {
@@ -546,6 +683,7 @@ function makeDiagnostic(
   rawCount: number,
   acceptedCount: number,
   rejectionReasons: Record<string, number>,
+  negativeKeywordHits: string[],
   topAccepted: string[],
   topRejected: string[],
   provider: string,
@@ -560,6 +698,7 @@ function makeDiagnostic(
     accepted_count: acceptedCount,
     rejected_count: rejectedCount,
     rejection_reasons: rejectionReasons,
+    negative_keyword_hits: negativeKeywordHits,
     top_accepted: topAccepted,
     top_rejected_examples: topRejected,
     message,
@@ -629,6 +768,22 @@ async function stepConvert(supabase: SupabaseClient, run: AiCampaignRun, summary
   const candidates = [...run.sourced_candidates];
   const pending = candidates.filter((c) => c.link_status === "SOURCED");
   if (pending.length === 0) {
+    const readyCount = candidates.filter((c) => c.link_status === "READY" && c.affiliate_link).length;
+    if (readyCount === 0) {
+      const msg = "Không có sản phẩm nào có link affiliate hợp lệ để tạo sản phẩm. Các lỗi chuyển link đã được đưa sang Công cụ thủ công.";
+      await patchRun(supabase, run.id, {
+        status: "FAILED",
+        current_step: "FAILED",
+        error_message: msg,
+        automation_error: msg,
+        next_auto_run_at: null,
+      });
+      summary.ok = false;
+      summary.errors.push(msg);
+      summary.message = msg;
+      await insertPostingLog(supabase, null, LOG.FAILED_NON_RECOVERABLE, "FAILED", msg, { ai_campaign_run_id: run.id });
+      return;
+    }
     await patchRun(supabase, run.id, { status: "CREATING_PRODUCTS", current_step: "CREATING_PRODUCTS" });
     summary.message = "Đã chuyển xong link, sang tạo sản phẩm.";
     return;
@@ -700,6 +855,22 @@ async function stepCreateProducts(supabase: SupabaseClient, run: AiCampaignRun, 
   const candidates = [...run.sourced_candidates];
   const ready = candidates.filter((c) => c.link_status === "READY" && c.affiliate_link && !c.product_id);
   if (ready.length === 0) {
+    const productCount = candidates.filter((c) => !!c.product_id).length;
+    if (productCount === 0) {
+      const msg = "Không có sản phẩm READY nào được tạo. Autopilot dừng để tránh tạo bài từ dữ liệu không hợp lệ.";
+      await patchRun(supabase, run.id, {
+        status: "FAILED",
+        current_step: "FAILED",
+        error_message: msg,
+        automation_error: msg,
+        next_auto_run_at: null,
+      });
+      summary.ok = false;
+      summary.errors.push(msg);
+      summary.message = msg;
+      await insertPostingLog(supabase, null, LOG.FAILED_NON_RECOVERABLE, "FAILED", msg, { ai_campaign_run_id: run.id });
+      return;
+    }
     await patchRun(supabase, run.id, { status: "CREATING_POSTS", current_step: "CREATING_POSTS" });
     summary.message = "Đã tạo xong sản phẩm, sang tạo bài.";
     return;

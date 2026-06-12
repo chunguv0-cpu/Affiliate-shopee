@@ -21,7 +21,6 @@ const PIPELINE: CampaignRunStatus[] = [
   "CREATING_PRODUCTS",
   "CREATING_POSTS",
   "CREATING_CREATIVES",
-  "WAITING_POST_REVIEW",
   "SCHEDULING",
   "SCHEDULED",
   "RUNNING",
@@ -73,7 +72,7 @@ export default function CampaignRunActions({
           <button type="button" disabled={pending || paused} onClick={() => run(() => runAutopilotStepAction(runId))} className={`${btn} bg-blue-600 text-white hover:bg-blue-700`}>
             {pending ? "Đang chạy..." : "Chạy ngay 1 batch"}
           </button>
-          <span className="text-xs text-gray-400">Chỉ dùng để test hoặc chạy ngay, bình thường cron sẽ tự chạy.</span>
+          <span className="text-xs text-gray-400">Chỉ dùng để test hoặc chạy ngay. Bình thường cron sẽ tự gọi endpoint này mỗi phút.</span>
           {paused ? (
             <button type="button" disabled={pending} onClick={() => run(() => resumeCampaignRun(runId))} className={`${btn} border border-emerald-300 text-emerald-700 hover:bg-emerald-50`}>
               Tiếp tục

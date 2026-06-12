@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 
-import { runCampaignAutopilotStep } from "@/lib/autopilot/campaign-autopilot-orchestrator";
+import { runCampaignAutopilotUntilBlocked } from "@/lib/autopilot/campaign-autopilot-orchestrator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,7 +29,7 @@ async function handle(request: Request) {
         // không có body JSON
       }
     }
-    const summary = await runCampaignAutopilotStep({ campaignRunId, trigger: "manual" });
+    const summary = await runCampaignAutopilotUntilBlocked({ campaignRunId, trigger: "manual" });
     revalidatePath("/dashboard/ai-autopilot");
     revalidatePath("/dashboard/review");
     return NextResponse.json({ ok: summary.ok, summary });

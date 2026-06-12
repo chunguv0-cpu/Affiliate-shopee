@@ -70,6 +70,15 @@ function formatDateTime(iso: string | null): string {
   return d.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
 }
 
+function compactJson(value: unknown): string {
+  if (!value) return "Chưa có";
+  try {
+    return JSON.stringify(value).slice(0, 360);
+  } catch {
+    return "Không đọc được";
+  }
+}
+
 export default async function AiAutopilotPage() {
   const runs = await getCampaignRuns();
   const cronConfigured = Boolean(process.env.CRON_SECRET?.trim());
@@ -82,13 +91,20 @@ export default async function AiAutopilotPage() {
       .filter((x): x is string => typeof x === "string" && x.length > 0)
       .sort()
       .at(-1) ?? null;
+  const lastCronHit =
+    activeForCron
+      .map((r) => r.last_cron_hit_at)
+      .filter((x): x is string => typeof x === "string" && x.length > 0)
+      .sort()
+      .at(-1) ?? null;
   const nextAutoRun =
     activeForCron
       .map((r) => r.next_auto_run_at)
       .filter((x): x is string => typeof x === "string" && x.length > 0)
       .sort()[0] ?? null;
-  const lastRunMs = lastAutoRun ? new Date(lastAutoRun).getTime() : NaN;
-  const cronStale = activeForCron.length > 0 && (!Number.isFinite(lastRunMs) || Date.now() - lastRunMs > 5 * 60 * 1000);
+  const lastCronMs = lastCronHit ? new Date(lastCronHit).getTime() : NaN;
+  const cronStale = activeForCron.length > 0 && (!Number.isFinite(lastCronMs) || Date.now() - lastCronMs > 5 * 60 * 1000);
+  const totalCronRuns = activeForCron.reduce((sum, r) => sum + r.cron_run_count, 0);
 
   return (
     <div className="space-y-6">
@@ -115,24 +131,25 @@ export default async function AiAutopilotPage() {
             CRON_SECRET: {cronConfigured ? "đã cấu hình" : "chưa cấu hình"}
           </span>
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
           <Counter label="Đang chờ cron" value={activeForCron.length} />
+          <Counter label="Cron đã gọi" value={totalCronRuns} />
+          <div className="rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5">
+            <div className="text-xs font-semibold text-gray-900">{formatDateTime(lastCronHit)}</div>
+            <div className="text-[10px] text-gray-500">Cron hit thật gần nhất</div>
+          </div>
           <div className="rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5">
             <div className="text-xs font-semibold text-gray-900">{formatDateTime(lastAutoRun)}</div>
-            <div className="text-[10px] text-gray-500">Lần chạy gần nhất</div>
+            <div className="text-[10px] text-gray-500">Autopilot run gần nhất</div>
           </div>
           <div className="rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5">
             <div className="text-xs font-semibold text-gray-900">{formatDateTime(nextAutoRun)}</div>
-            <div className="text-[10px] text-gray-500">Lần chạy kế tiếp</div>
-          </div>
-          <div className="rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5">
-            <div className="text-xs font-semibold text-gray-900">{activeForCron[0]?.current_step ?? "Không có"}</div>
-            <div className="text-[10px] text-gray-500">Bước đang chờ</div>
+            <div className="text-[10px] text-gray-500">Next planned run</div>
           </div>
         </div>
         {cronStale ? (
           <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
-            Cron Autopilot chưa chạy gần đây. Hãy kiểm tra cron-job.org hoặc Vercel cron.
+            Chưa thấy cron thật sự gọi endpoint. Next auto run chỉ là thời gian dự kiến, không phải cron đang chạy. Hãy cấu hình cron-job.org hoặc Vercel Cron gọi /api/cron/run-ai-autopilot mỗi phút.
           </p>
         ) : null}
       </div>
@@ -147,6 +164,14 @@ export default async function AiAutopilotPage() {
 
         {runs.map(({ run, counters }) => {
           const rank = statusRank(run.status);
+          const acceptedFromDiagnostics = run.sourcing_diagnostics.reduce((sum, d) => sum + d.accepted_count, 0);
+          const rejectedFromDiagnostics = run.sourcing_diagnostics.reduce((sum, d) => sum + d.rejected_count, 0);
+          const lastCronMsForRun = run.last_cron_hit_at ? new Date(run.last_cron_hit_at).getTime() : NaN;
+          const runCronStale =
+            CRON_ACTIVE_STATUSES.includes(run.status) &&
+            run.is_autopilot_enabled &&
+            !run.paused &&
+            (!Number.isFinite(lastCronMsForRun) || Date.now() - lastCronMsForRun > 5 * 60 * 1000);
           return (
             <div key={run.id} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-2">
@@ -183,8 +208,10 @@ export default async function AiAutopilotPage() {
               </div>
 
               {/* Counters */}
-              <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-10">
+              <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-12">
                 <Counter label="Cơ hội" value={counters.opportunities} />
+                <Counter label="Nhận" value={acceptedFromDiagnostics} />
+                <Counter label="Loại" value={rejectedFromDiagnostics} />
                 <Counter label="Đã tìm" value={counters.sourced} />
                 <Counter label="Có link" value={counters.linksConverted} />
                 <Counter label="Sản phẩm" value={counters.productsCreated} />
@@ -198,9 +225,18 @@ export default async function AiAutopilotPage() {
 
               <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-gray-500 sm:grid-cols-3">
                 <div>Autopilot: {run.is_autopilot_enabled && !run.paused ? "Đang bật" : "Tạm dừng"}</div>
+                <div>Last cron hit: {formatDateTime(run.last_cron_hit_at)}</div>
+                <div>Cron run count: {run.cron_run_count}</div>
                 <div>Last auto run: {formatDateTime(run.last_auto_run_at)}</div>
                 <div>Next auto run: {formatDateTime(run.next_auto_run_at)}</div>
+                <div>Last cron result: {compactJson(run.last_cron_result)}</div>
               </div>
+
+              {runCronStale ? (
+                <p className="mt-2 rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-700">
+                  Cron chưa chạy thật. Hãy cấu hình cron-job.org hoặc Vercel Cron gọi /api/cron/run-ai-autopilot mỗi phút.
+                </p>
+              ) : null}
 
               {run.error_message || run.automation_error ? (
                 <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">{run.error_message ?? run.automation_error}</p>
@@ -224,6 +260,7 @@ export default async function AiAutopilotPage() {
                           </div>
                           {d.top_accepted.length > 0 ? <div className="text-emerald-700">Nhận: {d.top_accepted.join("; ")}</div> : null}
                           {d.top_rejected_examples.length > 0 ? <div className="text-rose-600">Loại: {d.top_rejected_examples.join("; ")}</div> : null}
+                          {d.negative_keyword_hits && d.negative_keyword_hits.length > 0 ? <div className="text-red-700">Từ khóa loại: {d.negative_keyword_hits.join(", ")}</div> : null}
                           <div className="text-gray-500">{d.message}</div>
                         </div>
                       );

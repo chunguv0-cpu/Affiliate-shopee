@@ -6,7 +6,7 @@ import { generateCampaignPlan } from "@/lib/autopilot/campaign-planner";
 import {
   getCampaignRunCounters,
   parseCampaignRunRow,
-  runCampaignAutopilotStep,
+  runCampaignAutopilotUntilBlocked,
 } from "@/lib/autopilot/campaign-autopilot-orchestrator";
 import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -272,10 +272,10 @@ export async function rejectCampaignRun(id: string): Promise<SimpleResult> {
 export async function runAutopilotStepAction(id: string): Promise<{ ok: boolean; message: string }> {
   if (!id) return { ok: false, message: "Thiếu mã chiến dịch." };
   try {
-    const summary = await runCampaignAutopilotStep({ campaignRunId: id, trigger: "manual" });
+    const summary = await runCampaignAutopilotUntilBlocked({ campaignRunId: id, trigger: "manual" });
     revalidatePath(PATH);
     revalidatePath("/dashboard/review");
-    return { ok: summary.ok, message: summary.message || "Đã chạy một bước." };
+    return { ok: summary.ok, message: summary.message || `Đã chạy ${summary.micro_steps} micro-step.` };
   } catch (err) {
     const m = err instanceof Error ? err.message : "Lỗi không xác định.";
     return { ok: false, message: `Chạy bước thất bại: ${m}` };

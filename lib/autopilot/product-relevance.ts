@@ -35,6 +35,7 @@ export type RelevanceVerdict = {
   components: RelevanceComponents;
   rejected_reason: RejectionReason | null;
   accepted_reason: string | null;
+  negative_hit?: string | null;
 };
 
 export type QueryPlan = {
@@ -114,21 +115,31 @@ const SHARED_NEGATIVE = [
   "kim cuong",
   "da nhua",
   "trang suc",
+  "nhan",
   "vong tay",
   "vong co",
   "hoa tai",
   "bong tai",
+  "day chuyen",
   "lac tay",
+  "hat cuom",
+  "charm",
   "mong tay",
   "nail",
+  "phu kien nail",
   "my pham",
+  "son",
   "son moi",
+  "kem",
   "phan",
   "kem duong",
   "mat na",
   "thoi trang nu",
   "vay",
   "dam",
+  "tui xach",
+  "giay dep",
+  "toc gia",
   "ao thun",
   "do choi",
   "thu nhoi bong",
@@ -153,12 +164,21 @@ export const CATEGORY_PROFILES: CategoryProfile[] = [
       "may xay",
       "may hut bui",
       "quat",
+      "quat mini",
       "thiet bi thong minh",
+      "thiet bi",
       "usb",
       "tu dong",
       "bluetooth",
       "dien tu",
       "gia dung thong minh",
+      "pin",
+      "cap",
+      "o cam",
+      "dong ho",
+      "camera",
+      "robot",
+      "dieu khien",
       "tai nghe",
       "loa",
       "chuot",
@@ -172,12 +192,19 @@ export const CATEGORY_PROFILES: CategoryProfile[] = [
     negative: [...SHARED_NEGATIVE, "op lung", "day deo", "khung anh"],
     expansionSeeds: [
       "den cam bien chuyen dong",
-      "may xay mini sac usb",
-      "gia do dien thoai gap gon",
-      "may hut bui mini ban lam viec",
       "den led tu quan ao cam bien",
-      "sac du phong mini",
+      "may xay mini sac usb",
+      "may hut bui mini ban lam viec",
+      "gia do dien thoai gap gon",
+      "may han mieng tui mini",
+      "o cam thong minh",
       "den ngu cam bien",
+      "can dien tu mini",
+      "dong ho bao thuc led",
+      "may khuech tan mini usb",
+      "quat mini usb",
+      "den ban led sac pin",
+      "sac du phong mini",
       "quat mini cam tay",
     ],
   },
@@ -267,15 +294,26 @@ const BROAD_TERMS = [
   "do dung gia dinh",
   "gia dung thong minh",
   "do cong nghe tien ich",
+  "do cong nghe doc la",
+  "do doc la",
+  "doc la",
 ];
 
 export function isBroadKeyword(keyword: string): boolean {
   const norm = normalizeText(keyword);
   if (!norm) return true;
   if (BROAD_TERMS.includes(norm)) return true;
+  const specificSignals = CATEGORY_PROFILES.flatMap((p) => p.allowed);
+  const hasSpecificSignal = specificSignals.some((term) => term && norm.includes(term));
+  if (!hasSpecificSignal && BROAD_TERMS.some((b) => norm.includes(b))) return true;
   // Quá ngắn / quá ít token cụ thể cũng coi là rộng.
   const meaningful = tokens(norm).filter((t) => !STOP.has(t));
   return meaningful.length <= 1 && BROAD_TERMS.some((b) => norm.includes(b));
+}
+
+export function isBroadOpportunity(opp: RelevanceOpportunity): boolean {
+  const hay = [opp.product_keyword, ...(opp.search_keywords ?? [])].join(" ");
+  return isBroadKeyword(hay);
 }
 
 /** Suy ra hồ sơ nhóm hàng phù hợp nhất cho 1 cơ hội. */
@@ -345,6 +383,7 @@ export type ScoreOptions = {
   requireImage?: boolean;
   isDuplicateRecent?: boolean;
   allowRepeat?: boolean;
+  minScore?: number;
 };
 
 /** Tầng 2+3 — guardrail nhóm + chấm điểm 0-100. */
@@ -360,17 +399,17 @@ export function scoreRelevance(
   // Hard reject: từ khóa loại.
   const negHit = firstNegativeHit(titleNorm, profile.negative);
   if (negHit) {
-    return { accepted: false, score: 0, components: zero, rejected_reason: "NEGATIVE_KEYWORD", accepted_reason: null };
+    return { accepted: false, score: 0, components: zero, rejected_reason: "NEGATIVE_KEYWORD", accepted_reason: null, negative_hit: negHit };
   }
 
   const hasImage = Array.isArray(item.image_urls) && item.image_urls.length > 0;
   if (options.requireImage && !hasImage) {
-    return { accepted: false, score: 0, components: zero, rejected_reason: "MISSING_IMAGE", accepted_reason: null };
+    return { accepted: false, score: 0, components: zero, rejected_reason: "MISSING_IMAGE", accepted_reason: null, negative_hit: null };
   }
 
   // Trùng gần đây.
   if (options.isDuplicateRecent && !options.allowRepeat) {
-    return { accepted: false, score: 0, components: zero, rejected_reason: "DUPLICATE_RECENT", accepted_reason: null };
+    return { accepted: false, score: 0, components: zero, rejected_reason: "DUPLICATE_RECENT", accepted_reason: null, negative_hit: null };
   }
 
   const kwRatio = jaccardKeywordMatch(opp, titleNorm);
@@ -396,11 +435,12 @@ export function scoreRelevance(
 
   // Category mismatch mạnh: nhóm cụ thể nhưng không có từ allowed nào và khớp keyword yếu.
   if (!isGeneric && allowedHits === 0 && kwRatio < 0.34) {
-    return { accepted: false, score, components, rejected_reason: "CATEGORY_MISMATCH", accepted_reason: null };
+    return { accepted: false, score, components, rejected_reason: "CATEGORY_MISMATCH", accepted_reason: null, negative_hit: null };
   }
 
-  if (score < RELEVANCE_THRESHOLD) {
-    return { accepted: false, score, components, rejected_reason: "LOW_RELEVANCE", accepted_reason: null };
+  const threshold = options.minScore ?? (isBroadOpportunity(opp) ? Math.max(70, RELEVANCE_THRESHOLD) : RELEVANCE_THRESHOLD);
+  if (score < threshold) {
+    return { accepted: false, score, components, rejected_reason: "LOW_RELEVANCE", accepted_reason: null, negative_hit: null };
   }
 
   return {
@@ -409,6 +449,7 @@ export function scoreRelevance(
     components,
     rejected_reason: null,
     accepted_reason: `Khớp từ khóa ${keyword}/30, đúng nhóm ${category}/25, score ${score}.`,
+    negative_hit: null,
   };
 }
 

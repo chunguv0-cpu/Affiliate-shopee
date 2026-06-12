@@ -492,6 +492,9 @@ create table if not exists ai_campaign_runs (
   auto_started_at      timestamptz,
   last_auto_run_at     timestamptz,
   next_auto_run_at     timestamptz,
+  last_cron_hit_at     timestamptz,
+  last_cron_result     jsonb default '{}'::jsonb,
+  cron_run_count       integer not null default 0,
   automation_error     text,
   automation_attempts  integer not null default 0,
   -- Phase 20: chẩn đoán sourcing (query, raw/accepted/rejected, lý do loại).
@@ -509,6 +512,7 @@ create table if not exists ai_campaign_runs (
 create index if not exists idx_ai_campaign_runs_status     on ai_campaign_runs (status);
 create index if not exists idx_ai_campaign_runs_created_at  on ai_campaign_runs (created_at desc);
 create index if not exists idx_ai_campaign_runs_autopilot_enabled on ai_campaign_runs (is_autopilot_enabled, status, next_auto_run_at);
+create index if not exists idx_ai_campaign_runs_last_cron_hit on ai_campaign_runs (last_cron_hit_at desc);
 
 alter table post_creative_assets add column if not exists ai_campaign_run_id uuid references ai_campaign_runs (id) on delete set null;
 create index if not exists idx_pca_campaign_run on post_creative_assets (ai_campaign_run_id);

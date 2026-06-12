@@ -518,6 +518,7 @@ export type CampaignSourcingDiagnostic = {
   accepted_count: number;
   rejected_count: number;
   rejection_reasons: Record<string, number>;
+  negative_keyword_hits?: string[];
   top_accepted: string[];
   top_rejected_examples: string[];
   message: string;
@@ -559,6 +560,9 @@ export type AiCampaignRun = {
   auto_started_at: string | null;
   last_auto_run_at: string | null;
   next_auto_run_at: string | null;
+  last_cron_hit_at: string | null;
+  last_cron_result: unknown;
+  cron_run_count: number;
   automation_error: string | null;
   automation_attempts: number;
   paused: boolean;

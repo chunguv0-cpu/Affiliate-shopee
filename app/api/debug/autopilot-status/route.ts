@@ -23,7 +23,7 @@ export async function GET() {
     const supabase = createSupabaseAdminClient();
     const { data: runs, error: runError } = await supabase
       .from("ai_campaign_runs")
-      .select("id, title, status, current_step, is_autopilot_enabled, paused, last_auto_run_at, next_auto_run_at, automation_error, updated_at")
+      .select("id, title, status, current_step, is_autopilot_enabled, paused, last_cron_hit_at, cron_run_count, last_cron_result, last_auto_run_at, next_auto_run_at, automation_error, updated_at")
       .order("updated_at", { ascending: false })
       .limit(100);
     if (runError) {
@@ -37,6 +37,9 @@ export async function GET() {
       current_step: string | null;
       is_autopilot_enabled: boolean | null;
       paused: boolean | null;
+      last_cron_hit_at: string | null;
+      cron_run_count: number | null;
+      last_cron_result: unknown;
       last_auto_run_at: string | null;
       next_auto_run_at: string | null;
       automation_error: string | null;
@@ -50,7 +53,7 @@ export async function GET() {
     const stuck = rows
       .filter((r) => ACTIVE_STATUSES.includes(r.status) && r.is_autopilot_enabled !== false && !r.paused)
       .filter((r) => {
-        const last = r.last_auto_run_at ? new Date(r.last_auto_run_at).getTime() : NaN;
+        const last = r.last_cron_hit_at ? new Date(r.last_cron_hit_at).getTime() : NaN;
         return !Number.isFinite(last) || now - last > 5 * 60 * 1000;
       })
       .slice(0, 20)
@@ -59,6 +62,8 @@ export async function GET() {
         title: r.title,
         status: r.status,
         current_step: r.current_step,
+        last_cron_hit_at: r.last_cron_hit_at,
+        cron_run_count: r.cron_run_count ?? 0,
         last_auto_run_at: r.last_auto_run_at,
         next_auto_run_at: r.next_auto_run_at,
         automation_error: r.automation_error,
@@ -73,6 +78,9 @@ export async function GET() {
       ok: true,
       active_campaign_count: rows.filter((r) => ACTIVE_STATUSES.includes(r.status) && r.is_autopilot_enabled !== false && !r.paused).length,
       campaigns_by_status: byStatus,
+      last_cron_hit: rows.map((r) => r.last_cron_hit_at).filter(Boolean).sort().at(-1) ?? null,
+      total_cron_run_count: rows.reduce((sum, r) => sum + (r.cron_run_count ?? 0), 0),
+      last_cron_result: rows.find((r) => r.last_cron_result)?.last_cron_result ?? null,
       last_auto_run: rows.map((r) => r.last_auto_run_at).filter(Boolean).sort().at(-1) ?? null,
       stuck_campaigns: stuck,
       pending_ai_jobs_count: pendingAiJobs ?? 0,
