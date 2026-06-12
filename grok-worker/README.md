@@ -16,11 +16,19 @@ npm run install:browser     # tải Chromium cho Playwright
 node index.mjs              # hoặc: npm start
 ```
 
-## Lấy cookie
-1. Đăng nhập grok.com bằng tài khoản (Super) trên Chrome.
-2. Dùng extension "Cookie Editor" → Export → JSON.
-3. Dán JSON vào `GROK_COOKIES` (hoặc lưu `cookies.json` và trỏ `GROK_COOKIES_FILE`).
-4. Copy đúng **User-Agent** của trình duyệt đó vào `GROK_USER_AGENT` (lệch UA dễ bị logout).
+## Lấy cookie (2 cách — chọn 1)
+
+**Cách A — F12 (nhanh, không cần extension):**
+1. Đăng nhập grok.com trên Chrome.
+2. F12 → tab **Network** → reload trang → bấm vào 1 request tới grok.com.
+3. Mục **Request Headers** → tìm dòng `cookie:` → copy **toàn bộ** giá trị (dạng `a=1; b=2; c=3`).
+4. Dán vào `GROK_COOKIES`. Worker tự hiểu định dạng này.
+> ⚠️ KHÔNG dùng Console gõ `document.cookie` — nó **thiếu cookie HttpOnly** (cookie đăng nhập) → sẽ hỏng.
+
+**Cách B — extension Cookie-Editor:** Export → **Export as JSON** → dán vào `GROK_COOKIES`.
+
+Sau đó, copy đúng **User-Agent** của trình duyệt đó vào `GROK_USER_AGENT` (lệch UA dễ bị logout):
+mở tab mới, Google "my user agent", copy chuỗi `Mozilla/5.0...`.
 
 ## Selector (quan trọng)
 UI grok.com thay đổi theo thời gian. Mặc định (`textarea`, `button[type=submit]`,

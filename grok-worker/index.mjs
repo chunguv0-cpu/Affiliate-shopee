@@ -33,31 +33,58 @@ const SEL_PROMPT = process.env.GROK_PROMPT_SELECTOR || 'textarea';
 const SEL_SUBMIT = process.env.GROK_SUBMIT_SELECTOR || 'button[type="submit"]';
 const SEL_IMAGE = process.env.GROK_IMAGE_SELECTOR || 'img[src^="https"]';
 
-/** Đọc cookie từ GROK_COOKIES (JSON) hoặc file GROK_COOKIES_FILE. */
+const COOKIE_DOMAIN = (process.env.GROK_COOKIE_DOMAIN || ".grok.com").trim();
+
+/** Parse chuỗi cookie thô từ F12 (Network -> Request Headers -> cookie: a=1; b=2). */
+function parseCookieHeader(str) {
+  return str
+    .split(";")
+    .map((pair) => pair.trim())
+    .filter(Boolean)
+    .map((pair) => {
+      const i = pair.indexOf("=");
+      if (i < 0) return null;
+      const name = pair.slice(0, i).trim();
+      const value = pair.slice(i + 1).trim();
+      if (!name) return null;
+      return { name, value, domain: COOKIE_DOMAIN, path: "/", secure: true, sameSite: "Lax" };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Đọc cookie từ GROK_COOKIES (JSON mảng HOẶC chuỗi thô "a=1; b=2" từ F12)
+ * hoặc file GROK_COOKIES_FILE.
+ */
 function loadCookies() {
   const raw = (process.env.GROK_COOKIES || "").trim();
   const file = (process.env.GROK_COOKIES_FILE || "").trim();
   let text = raw;
   if (!text && file && fs.existsSync(file)) text = fs.readFileSync(file, "utf8");
   if (!text) return [];
+
+  // Thử JSON mảng (export từ Cookie-Editor).
   try {
     const arr = JSON.parse(text);
-    if (!Array.isArray(arr)) return [];
-    // Chuẩn hoá cookie cho Playwright (cần domain/path).
-    return arr
-      .filter((c) => c && c.name && c.value)
-      .map((c) => ({
-        name: c.name,
-        value: c.value,
-        domain: c.domain || ".grok.com",
-        path: c.path || "/",
-        httpOnly: !!c.httpOnly,
-        secure: c.secure !== false,
-        sameSite: c.sameSite || "Lax",
-      }));
+    if (Array.isArray(arr)) {
+      return arr
+        .filter((c) => c && c.name && c.value)
+        .map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain || COOKIE_DOMAIN,
+          path: c.path || "/",
+          httpOnly: !!c.httpOnly,
+          secure: c.secure !== false,
+          sameSite: c.sameSite || "Lax",
+        }));
+    }
   } catch {
-    return [];
+    /* không phải JSON -> coi như chuỗi thô F12 */
   }
+
+  // Chuỗi cookie thô từ F12 (Network tab).
+  return parseCookieHeader(text);
 }
 
 let browser = null;
