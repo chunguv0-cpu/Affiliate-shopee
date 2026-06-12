@@ -495,6 +495,8 @@ create table if not exists ai_jobs (
   error_message       text,
   attempts            int not null default 0,
   max_attempts        int not null default 3,
+  next_retry_at       timestamptz,
+  last_error          text,
   locked_at           timestamptz,
   started_at          timestamptz,
   finished_at         timestamptz,

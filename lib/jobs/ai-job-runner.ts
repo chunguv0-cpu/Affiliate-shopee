@@ -116,8 +116,12 @@ function isRateLimitMessage(message: string | null | undefined): boolean {
 }
 
 function retryDelayMs(job: Pick<AiJob, "attempts" | "error_message">): number {
-  const base = isRateLimitMessage(job.error_message) ? RATE_LIMIT_RETRY_DELAY_MS : JOB_RETRY_DELAY_MS;
   const attempts = Math.max(1, job.attempts ?? 1);
+  if (/V98_IMAGE_TIMEOUT_RETRY_LATER|timeout|abort/i.test(job.error_message ?? "")) {
+    const steps = [60_000, 3 * 60_000, 10 * 60_000];
+    return steps[Math.min(steps.length - 1, attempts - 1)];
+  }
+  const base = isRateLimitMessage(job.error_message) ? RATE_LIMIT_RETRY_DELAY_MS : JOB_RETRY_DELAY_MS;
   const delay = base * 2 ** (attempts - 1);
   return Math.min(MAX_RETRY_DELAY_MS, delay);
 }

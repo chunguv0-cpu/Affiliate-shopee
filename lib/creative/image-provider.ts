@@ -10,6 +10,7 @@ import OpenAI from "openai";
 
 export type ImageProvider = "mock" | "openai" | "v98" | "none";
 const TEXT_FREE_IMAGE_PROMPT_RULE = "no text, no letters, no words, no watermark, no logo, no UI text";
+const V98_TIMEOUT_ERROR = "V98_IMAGE_TIMEOUT_RETRY_LATER";
 
 export type GenerateImageInput = {
   product_name: string;
@@ -60,6 +61,12 @@ export type ImageProviderConfig = {
   isConfigured: boolean;
   errors: string[];
 };
+
+function readIntEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
 
 export function getImageProviderConfig(): ImageProviderConfig {
   const provider = getImageProvider();
@@ -135,21 +142,39 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
   if (isDalle && !isGptImage) params.response_format = "b64_json";
 
   // V98 hay trả 429 "Something wrong, please try again" -> tự chờ giãn rồi thử lại.
+  const timeoutMs = readIntEnv("IMAGE_PROVIDER_TIMEOUT_MS", 22_000, 5_000, 55_000);
+  const callImagesGenerate = async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return (await client.images.generate(
+        params as unknown as Parameters<typeof client.images.generate>[0],
+        { signal: controller.signal } as never,
+      )) as unknown as { data?: Array<{ b64_json?: string | null; url?: string | null }> };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const isTimeout = (e: unknown): boolean => {
+    const name = (e as { name?: string })?.name ?? "";
+    const msg = e instanceof Error ? e.message : "";
+    return name === "AbortError" || /abort|timeout/i.test(msg);
+  };
+
   const isRetryable = (e: unknown): boolean => {
     const status = (e as { status?: number })?.status;
     const msg = e instanceof Error ? e.message.toLowerCase() : "";
     return status === 429 || status === 503 || /429|rate|too many|try again|overload|timeout|temporar/i.test(msg);
   };
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   // Backoff đủ dài để vượt rate-limit V98 (tổng ~37s, trong giới hạn function 60s).
-  const DELAYS = [4000, 10000, 22000];
+  const DELAYS: number[] = [];
 
   let lastError = "Image API call failed.";
   for (let attempt = 0; attempt <= DELAYS.length; attempt += 1) {
     try {
-      const res = (await client.images.generate(
-        params as unknown as Parameters<typeof client.images.generate>[0],
-      )) as unknown as { data?: Array<{ b64_json?: string | null; url?: string | null }> };
+      const res = await callImagesGenerate();
       const b64 = res.data?.[0]?.b64_json ?? null;
       const url = res.data?.[0]?.url ?? null;
       if (b64) return { b64, url: null, mock: false, provider, model: cfg.model, status: "READY" };
@@ -157,7 +182,7 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
       lastError = "No image URL or base64 returned from image model.";
       break; // không phải lỗi tạm thời -> dừng
     } catch (err) {
-      lastError = err instanceof Error ? err.message.slice(0, 300) : "Image API call failed.";
+      lastError = isTimeout(err) ? V98_TIMEOUT_ERROR : err instanceof Error ? err.message.slice(0, 300) : "Image API call failed.";
       if (attempt < DELAYS.length && isRetryable(err)) {
         await sleep(DELAYS[attempt]);
         continue;

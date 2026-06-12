@@ -373,7 +373,7 @@ export async function runCampaignAutopilotStep(input: AutopilotStepInput): Promi
   });
 
   try {
-    await dispatchStep(supabase, run, summary);
+    await dispatchStep(supabase, run, summary, input.trigger);
   } catch (err) {
     const m = err instanceof Error ? err.message : "Lỗi không xác định.";
     summary.errors.push(m);
@@ -461,7 +461,12 @@ export async function runCampaignAutopilotUntilBlocked(input: AutopilotLoopInput
   return loop;
 }
 
-async function dispatchStep(supabase: SupabaseClient, run: AiCampaignRun, summary: AutopilotSummary): Promise<void> {
+async function dispatchStep(
+  supabase: SupabaseClient,
+  run: AiCampaignRun,
+  summary: AutopilotSummary,
+  trigger: "manual" | "cron",
+): Promise<void> {
   switch (run.status) {
     case "APPROVED":
       await patchRun(supabase, run.id, { status: "SOURCING_PRODUCTS", current_step: "SOURCING_PRODUCTS" });
@@ -476,7 +481,7 @@ async function dispatchStep(supabase: SupabaseClient, run: AiCampaignRun, summar
     case "CREATING_POSTS":
       return stepCreatePosts(supabase, run, summary);
     case "CREATING_CREATIVES":
-      return stepCreatives(supabase, run, summary);
+      return stepCreatives(supabase, run, summary, trigger);
     case "WAITING_POST_REVIEW":
       return stepWaitingReview(supabase, run, summary);
     case "SCHEDULING":
@@ -1087,7 +1092,12 @@ async function stepCreatePosts(supabase: SupabaseClient, run: AiCampaignRun, sum
 // ---------------------------------------------------------------------------
 // CREATING_CREATIVES — pump job steps (giới hạn), chờ tất cả job kết thúc.
 // ---------------------------------------------------------------------------
-async function stepCreatives(supabase: SupabaseClient, run: AiCampaignRun, summary: AutopilotSummary): Promise<void> {
+async function stepCreatives(
+  supabase: SupabaseClient,
+  run: AiCampaignRun,
+  summary: AutopilotSummary,
+  trigger: "manual" | "cron",
+): Promise<void> {
   // An toàn: enqueue nốt sản phẩm chưa có job (nếu sót).
   const need = await productsNeedingJobs(supabase, run);
   if (need.length > 0) {
@@ -1124,25 +1134,27 @@ async function stepCreatives(supabase: SupabaseClient, run: AiCampaignRun, summa
   }
 
   // Chạy tối đa N bước cho các job chưa kết thúc của run.
-  const { data: runnableRows } = await supabase
-    .from("ai_jobs")
-    .select("id, status")
-    .eq("ai_campaign_run_id", run.id)
-    .in("status", ["PENDING", "WAITING_RETRY", "RUNNING"])
-    .is("locked_at", null)
-    .order("updated_at", { ascending: true })
-    .limit(LIMITS.jobSteps() * 3);
-  const runnable = (runnableRows ?? []) as Array<{ id: string }>;
-  const stepBudget = LIMITS.jobSteps();
-  for (let i = 0; i < runnable.length && summary.creative_job_steps_processed < stepBudget; i += 1) {
-    const r = await runAiJobStep(runnable[i].id);
-    summary.creative_job_steps_processed += 1;
-    await insertPostingLog(supabase, null, LOG.CREATIVE_STEP, r.ok ? "SUCCESS" : "FAILED", `Job ${runnable[i].id} -> ${r.step ?? "?"} (${r.status}).`, {
-      ai_campaign_run_id: run.id,
-      job_id: runnable[i].id,
-      step: r.step,
-      status: r.status,
-    });
+  if (trigger !== "cron") {
+    const { data: runnableRows } = await supabase
+      .from("ai_jobs")
+      .select("id, status")
+      .eq("ai_campaign_run_id", run.id)
+      .in("status", ["PENDING", "WAITING_RETRY", "RUNNING"])
+      .is("locked_at", null)
+      .order("updated_at", { ascending: true })
+      .limit(LIMITS.jobSteps() * 3);
+    const runnable = (runnableRows ?? []) as Array<{ id: string }>;
+    const stepBudget = LIMITS.jobSteps();
+    for (let i = 0; i < runnable.length && summary.creative_job_steps_processed < stepBudget; i += 1) {
+      const r = await runAiJobStep(runnable[i].id);
+      summary.creative_job_steps_processed += 1;
+      await insertPostingLog(supabase, null, LOG.CREATIVE_STEP, r.ok ? "SUCCESS" : "FAILED", `Job ${runnable[i].id} -> ${r.step ?? "?"} (${r.status}).`, {
+        ai_campaign_run_id: run.id,
+        job_id: runnable[i].id,
+        step: r.step,
+        status: r.status,
+      });
+    }
   }
 
   // Tất cả job của run đã kết thúc chưa?

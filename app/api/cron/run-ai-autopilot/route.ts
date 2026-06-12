@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 
 import { runCampaignAutopilotUntilBlocked, type AutopilotLoopSummary } from "@/lib/autopilot/campaign-autopilot-orchestrator";
 import { acquireCampaignLock, releaseCampaignLock } from "@/lib/autopilot/campaign-lock";
+import { checkCronAuth, readCronHardTimeoutMs, readCronSoftTimeoutMs, shouldStopCron } from "@/lib/cron/utils";
 import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { CampaignRunStatus } from "@/lib/types";
@@ -10,7 +11,7 @@ import type { CampaignRunStatus } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // Một bước có thể chạy 1-2 bước job (gồm V98 image) — cho phép tới 60s.
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 const ACTIVE_STATUSES: CampaignRunStatus[] = [
   "APPROVED",
@@ -38,6 +39,7 @@ function checkAuth(request: Request): NextResponse | null {
   }
   return null;
 }
+void checkAuth;
 
 function readMaxRuns(): number {
   const raw = process.env.MAX_CAMPAIGNS_PER_CRON_RUN?.trim() || process.env.MAX_CAMPAIGN_RUNS_PER_CRON?.trim();
@@ -79,7 +81,7 @@ function compareDueCampaigns(a: CronRunRow, b: CronRunRow): number {
  * Bảo vệ bằng Bearer CRON_SECRET.
  */
 async function handle(request: Request) {
-  const authError = checkAuth(request);
+  const authError = checkCronAuth(request);
   if (authError) return authError;
 
   try {
@@ -94,7 +96,8 @@ async function handle(request: Request) {
       1,
       Math.min(readIntEnv("MAX_MICRO_STEPS_PER_CAMPAIGN_PER_RUN", 2, 1, 10), Math.ceil(totalMicroStepsBudget / maxRuns)),
     );
-    const maxSeconds = readIntEnv("MAX_SECONDS_PER_CRON_RUN", 45, 5, 55);
+    const softTimeoutMs = Math.min(readCronSoftTimeoutMs(), readCronHardTimeoutMs() - 2_000);
+    const maxSeconds = Math.min(readIntEnv("MAX_SECONDS_PER_CRON_RUN", 20, 5, 25), Math.max(5, Math.floor(softTimeoutMs / 1000)));
     const nextDelaySeconds = readIntEnv("AUTOPILOT_CRON_INTERVAL_SECONDS", 60, 30, 3600);
     const deadlineMs = cronStartedMs + maxSeconds * 1000;
     const nowIso = new Date().toISOString();
@@ -119,7 +122,7 @@ async function handle(request: Request) {
     let totalMicroSteps = 0;
     let stoppedReason = "all_processed";
     for (const row of candidates) {
-      if (Date.now() >= deadlineMs) { stoppedReason = "time_budget_exhausted"; break; }
+      if (Date.now() >= deadlineMs || shouldStopCron(cronStartedMs, softTimeoutMs)) { stoppedReason = "TIME_BUDGET_EXHAUSTED"; break; }
       if (totalMicroSteps >= totalMicroStepsBudget) { stoppedReason = "micro_step_budget_exhausted"; break; }
 
       // PART 2 — khóa campaign để tránh xử lý trùng khi cron chồng nhau.
@@ -207,6 +210,7 @@ async function handle(request: Request) {
     const agg = (key: keyof AutopilotLoopSummary) => results.reduce((s, r) => s + (typeof r[key] === "number" ? (r[key] as number) : 0), 0);
     return NextResponse.json({
       ok: true,
+      partial: stoppedReason !== "all_processed",
       cron_run_id: cronRunId,
       campaigns_seen: candidates.length,
       campaigns_processed: results.length,

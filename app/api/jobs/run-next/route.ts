@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 
+import { checkCronAuth } from "@/lib/cron/utils";
 import { pickAndRunNextJob } from "@/lib/jobs/ai-job-runner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // Một bước có thể gọi V98 image (chậm) — cho phép tới 60s.
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 function checkAuth(request: Request): NextResponse | null {
   const cronSecret = process.env.CRON_SECRET?.trim();
@@ -18,13 +19,14 @@ function checkAuth(request: Request): NextResponse | null {
   }
   return null;
 }
+void checkAuth;
 
 /**
  * Chạy MỘT bước của job kế tiếp (PENDING/WAITING_RETRY hoặc RUNNING quá hạn).
  * Bảo vệ bằng Bearer CRON_SECRET. Cho phép cron-job.org gọi mỗi 1 phút.
  */
 async function handle(request: Request) {
-  const authError = checkAuth(request);
+  const authError = checkCronAuth(request);
   if (authError) return authError;
   try {
     const result = await pickAndRunNextJob();

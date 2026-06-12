@@ -131,6 +131,18 @@ File [`vercel.json`](vercel.json) khai báo chạy **1 lần/ngày** lúc 01:00 
 > nâng gói **Pro** rồi đổi `schedule` thành `*/30 * * * *`. Bạn vẫn có thể gọi cron
 > thủ công bất cứ lúc nào bằng header `Authorization: Bearer <CRON_SECRET>`.
 
+### Cron jobs cho AI Autopilot
+
+Neu dung cron-job.org timeout 30s, tao 3 cron job rieng va gui header
+`x-cron-secret: YOUR_CRON_SECRET` hoac `Authorization: Bearer YOUR_CRON_SECRET`:
+
+- `GET /api/cron/run-ai-autopilot` moi 1 phut: chay state machine nhe, enqueue job.
+- `GET /api/cron/run-creative-worker` moi 1 phut: xu ly toi da 1 buoc creative/image.
+- `GET /api/cron/publish-due-posts` moi 1-5 phut: dang bai da duyet va den lich.
+
+Creative worker duoc tach rieng de request tra ve truoc 25s; V98 image timeout se duoc dua ve
+`WAITING_RETRY` va cron tiep theo se thu lai slot anh dang thieu.
+
 ## 9. Lưu ý production (Phase 8)
 
 - **KHÔNG commit `.env.local`.** File này đã được `.gitignore`. Chỉ `.env.example`
