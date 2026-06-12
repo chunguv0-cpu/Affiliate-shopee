@@ -325,7 +325,7 @@ export async function getOpsData(): Promise<OpsData> {
     tasks.push({ priority: "HIGH", title: `${stuckJobs} job AI có thể bị treo`, reason: "Đang RUNNING quá 10 phút.", action: "Mở gợi ý & đánh dấu thất bại.", href: "/dashboard/ai-planner" });
 
   if (needLink > 0)
-    tasks.push({ priority: "MEDIUM", title: `${needLink} sản phẩm cần tìm link`, reason: "Sourcing đang NEW/SOURCING.", action: "Tìm link & convert sản phẩm.", href: "/dashboard/sourcing" });
+    tasks.push({ priority: "MEDIUM", title: `${needLink} sản phẩm cần tìm link`, reason: "Sourcing đang NEW/SOURCING.", action: "Tìm link & convert sản phẩm.", href: "/dashboard/manual-tools?tab=sourcing" });
   if (draftPlans > 0)
     tasks.push({ priority: "MEDIUM", title: `${draftPlans} gợi ý AI chờ duyệt`, reason: "Recommendation đang DRAFT.", action: "Mở & duyệt gợi ý.", href: "/dashboard/ai-planner" });
   const activeNoPosts = campaigns.filter((c) => c.total === 0).length;

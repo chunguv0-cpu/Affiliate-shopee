@@ -464,7 +464,12 @@ export type ProductOpportunity = {
 };
 
 /** Trạng thái link của một ứng viên đã sourcing. */
-export type SourcedCandidateLinkStatus = "SOURCED" | "READY" | "LINK_CONVERSION_FAILED" | "NEEDS_PROVIDER";
+export type SourcedCandidateLinkStatus =
+  | "SOURCED"
+  | "READY"
+  | "LINK_CONVERSION_FAILED"
+  | "NEEDS_PROVIDER"
+  | "NO_RELEVANT_PRODUCT";
 
 /** Một ứng viên sản phẩm đã tìm được (giữ trong ai_campaign_runs.sourced_candidates). */
 export type SourcedCandidate = {
@@ -485,6 +490,26 @@ export type SourcedCandidate = {
   link_status: SourcedCandidateLinkStatus;
   product_id: string | null;
   score: number;
+  // Phase 20 — relevance gate.
+  relevance_score?: number | null;
+  accepted_reason?: string | null;
+  rejected_reason?: string | null;
+};
+
+/** Chẩn đoán sourcing của 1 cơ hội (query/raw/accepted/rejected + lý do). */
+export type CampaignSourcingDiagnostic = {
+  opportunity_index: number;
+  product_keyword: string;
+  queries: string[];
+  raw_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  rejection_reasons: Record<string, number>;
+  top_accepted: string[];
+  top_rejected_examples: string[];
+  message: string;
+  provider: string;
+  created_at: string;
 };
 
 /** Kế hoạch đăng bài (windows + tần suất). */
@@ -508,6 +533,7 @@ export type AiCampaignRun = {
   ai_strategy: unknown;
   product_opportunities: ProductOpportunity[];
   sourced_candidates: SourcedCandidate[];
+  sourcing_diagnostics: CampaignSourcingDiagnostic[];
   posting_plan: PostingPlan;
   creative_direction: unknown;
   approved_at: string | null;

@@ -93,7 +93,7 @@ export default function CampaignRunActions({
         </>
       ) : null}
 
-      <Link href="/dashboard/sourcing" className={`${btn} border border-gray-200 text-gray-500 hover:bg-gray-50`}>
+      <Link href="/dashboard/manual-tools?tab=sourcing" className={`${btn} border border-gray-200 text-gray-500 hover:bg-gray-50`}>
         Tìm link thủ công
       </Link>
 

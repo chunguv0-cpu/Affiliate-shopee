@@ -38,7 +38,8 @@ export type ImportCsvResult =
   | { ok: false; error: string };
 
 const PRODUCTS_PATH = "/dashboard/products";
-const LINKS_PATH = "/dashboard/affiliate-links";
+// Phase 20: trang quản lý link đã gộp vào "Công cụ thủ công".
+const LINKS_PATH = "/dashboard/manual-tools";
 
 function readText(formData: FormData, key: string): string | null {
   const raw = formData.get(key);

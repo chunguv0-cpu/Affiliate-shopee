@@ -31,6 +31,43 @@ function intField(fd: FormData, key: string, fallback: number, min: number, max:
   return Math.min(max, Math.max(min, n));
 }
 
+/** Thu thập sản phẩm/nhóm đã dùng gần đây để AI tránh lặp lại (Phase 20). */
+async function gatherNoveltyContext(
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
+): Promise<{ excluded: string[]; usedCategories: string[] }> {
+  const windowRaw = process.env.PRODUCT_NOVELTY_WINDOW_DAYS?.trim();
+  const windowDays = Number.isFinite(Number.parseInt(windowRaw ?? "", 10)) ? Math.max(1, Number.parseInt(windowRaw as string, 10)) : 30;
+  const sinceIso = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+  const excluded = new Set<string>();
+  const usedCategories = new Set<string>();
+  try {
+    const { data: prods } = await supabase
+      .from("products")
+      .select("product_name, created_at")
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false })
+      .limit(60);
+    for (const p of (prods ?? []) as Array<{ product_name: string | null }>) {
+      if (p.product_name) excluded.add(p.product_name);
+    }
+    const { data: runs } = await supabase
+      .from("ai_campaign_runs")
+      .select("product_opportunities, created_at")
+      .gte("created_at", sinceIso)
+      .limit(40);
+    for (const r of (runs ?? []) as Array<{ product_opportunities: unknown }>) {
+      const list = Array.isArray(r.product_opportunities) ? (r.product_opportunities as Array<{ product_keyword?: string; category?: string }>) : [];
+      for (const o of list) {
+        if (o?.product_keyword) excluded.add(o.product_keyword);
+        if (o?.category) usedCategories.add(o.category);
+      }
+    }
+  } catch {
+    // không chặn việc tạo gợi ý nếu thu thập lỗi
+  }
+  return { excluded: Array.from(excluded).slice(0, 60), usedCategories: Array.from(usedCategories).slice(0, 20) };
+}
+
 /** Tạo gợi ý chiến dịch AI (chưa tạo sản phẩm) -> WAITING_APPROVAL. */
 export async function createCampaignPlanAction(fd: FormData): Promise<CreatePlanResult> {
   const objective = text(fd, "objective");
@@ -42,12 +79,31 @@ export async function createCampaignPlanAction(fd: FormData): Promise<CreatePlan
 
   try {
     const supabase = createSupabaseAdminClient();
+
+    // PART E #18 — chống tạo trùng do bấm nhiều lần.
+    const recentIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const objNorm = objective.toLowerCase().replace(/\s+/g, " ").trim();
+    const { data: recentRuns } = await supabase
+      .from("ai_campaign_runs")
+      .select("objective, created_at")
+      .gte("created_at", recentIso)
+      .limit(10);
+    const dup = (recentRuns ?? []).some(
+      (r) => typeof r.objective === "string" && r.objective.toLowerCase().replace(/\s+/g, " ").trim() === objNorm,
+    );
+    if (dup) {
+      return { ok: false, error: "Bạn vừa tạo một chiến dịch với mục tiêu này cách đây ít phút. Hãy kiểm tra danh sách bên dưới trước khi tạo lại." };
+    }
+
+    const novelty = await gatherNoveltyContext(supabase);
     const plan = await generateCampaignPlan({
       objective,
       days,
       posts_per_day: postsPerDay,
       priority_group: priorityGroup,
       target_customer: targetCustomer,
+      excluded_recent_products: novelty.excluded,
+      already_used_categories: novelty.usedCategories,
     });
     const { data, error } = await supabase
       .from("ai_campaign_runs")
@@ -95,12 +151,15 @@ export async function regenerateCampaignPlan(id: string): Promise<SimpleResult> 
     if (run.status !== "WAITING_APPROVAL" && run.status !== "DRAFT" && run.status !== "FAILED") {
       return { ok: false, error: "Chỉ chạy lại gợi ý khi chiến dịch chưa được duyệt." };
     }
+    const novelty = await gatherNoveltyContext(supabase);
     const plan = await generateCampaignPlan({
       objective: run.objective ?? "Tăng đơn hàng",
       days: run.posting_plan?.days ?? 7,
       posts_per_day: run.posting_plan?.posts_per_day ?? 2,
       priority_group: null,
       target_customer: run.target_customer,
+      excluded_recent_products: novelty.excluded,
+      already_used_categories: novelty.usedCategories,
     });
     await supabase
       .from("ai_campaign_runs")

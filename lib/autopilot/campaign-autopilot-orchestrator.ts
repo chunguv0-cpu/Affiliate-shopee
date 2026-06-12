@@ -5,10 +5,19 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { deriveLinkStatus, slugify } from "@/lib/affiliate";
 import { convertProductUrlToAffiliateLink } from "@/lib/autopilot/affiliate-link-converter";
 import {
-  scoreSearchItem,
-  searchShopeeProductsForCampaign,
+  searchRawProducts,
   type SourcingSearchItem,
 } from "@/lib/autopilot/product-sourcing-provider";
+import {
+  expandQueries,
+  inferCategoryProfile,
+  normalizeText,
+  REJECTION_REASON_LABELS,
+  scoreRelevance,
+  suggestSpecificKeywords,
+  titleSimilarity,
+  type RejectionReason,
+} from "@/lib/autopilot/product-relevance";
 import { scheduleApprovedPostsForRun } from "@/lib/autopilot/scheduler";
 import { runAiJobStep } from "@/lib/jobs/ai-job-runner";
 import { insertPostingLog } from "@/lib/posts/log";
@@ -16,9 +25,13 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type {
   AiCampaignRun,
   CampaignRunStatus,
+  CampaignSourcingDiagnostic,
   ProductOpportunity,
   SourcedCandidate,
 } from "@/lib/types";
+
+const NOVELTY_WINDOW_DAYS = readIntEnv("PRODUCT_NOVELTY_WINDOW_DAYS", 30, 1, 365);
+const ALLOW_REPEAT_PRODUCTS = (process.env.ALLOW_REPEAT_PRODUCTS?.trim().toLowerCase() ?? "false") === "true";
 
 /**
  * Phase 19 — Bộ điều phối Autopilot theo BATCH.
@@ -130,6 +143,7 @@ export function parseCampaignRunRow(row: Record<string, unknown>): AiCampaignRun
     ai_strategy: row.ai_strategy ?? {},
     product_opportunities: asArray<ProductOpportunity>(row.product_opportunities),
     sourced_candidates: asArray<SourcedCandidate>(row.sourced_candidates),
+    sourcing_diagnostics: asArray<CampaignSourcingDiagnostic>(row.sourcing_diagnostics),
     posting_plan: (row.posting_plan as AiCampaignRun["posting_plan"]) ?? {},
     creative_direction: row.creative_direction ?? {},
     approved_at: (row.approved_at as string | null) ?? null,
@@ -325,15 +339,63 @@ async function dispatchStep(supabase: SupabaseClient, run: AiCampaignRun, summar
 }
 
 // ---------------------------------------------------------------------------
-// SOURCING_PRODUCTS
+// SOURCING_PRODUCTS — tìm + LỌC NGHIÊM NGẶT (relevance gate) + chống trùng.
 // ---------------------------------------------------------------------------
+type SeenIndex = { urls: Set<string>; affs: Set<string>; titles: string[] };
+
+async function buildSeenIndex(supabase: SupabaseClient, windowDays: number): Promise<SeenIndex> {
+  const sinceIso = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+  const urls = new Set<string>();
+  const affs = new Set<string>();
+  const titles: string[] = [];
+  const add = (url: string | null | undefined, aff: string | null | undefined, title: string | null | undefined) => {
+    if (url) urls.add(normalizeText(url));
+    if (aff) affs.add(aff.trim());
+    if (title) titles.push(title);
+  };
+  // products gần đây
+  const { data: prods } = await supabase
+    .from("products")
+    .select("product_name, original_url, affiliate_link, created_at")
+    .gte("created_at", sinceIso)
+    .limit(800);
+  for (const p of (prods ?? []) as Array<{ product_name: string | null; original_url: string | null; affiliate_link: string | null }>) {
+    add(p.original_url, p.affiliate_link, p.product_name);
+  }
+  // sourcing_candidates gần đây
+  const { data: cands } = await supabase
+    .from("sourcing_candidates")
+    .select("suggested_product, affiliate_link, created_at")
+    .gte("created_at", sinceIso)
+    .limit(800);
+  for (const c of (cands ?? []) as Array<{ suggested_product: string | null; affiliate_link: string | null }>) {
+    add(null, c.affiliate_link, c.suggested_product);
+  }
+  // sourced_candidates của các run gần đây
+  const { data: runs } = await supabase
+    .from("ai_campaign_runs")
+    .select("sourced_candidates, created_at")
+    .gte("created_at", sinceIso)
+    .limit(60);
+  for (const r of (runs ?? []) as Array<{ sourced_candidates: unknown }>) {
+    const list = Array.isArray(r.sourced_candidates) ? (r.sourced_candidates as SourcedCandidate[]) : [];
+    for (const c of list) add(c.product_url, c.affiliate_link, c.product_name);
+  }
+  return { urls, affs, titles };
+}
+
+function isDuplicateRecent(item: SourcingSearchItem, seen: SeenIndex): boolean {
+  if (item.affiliate_link && seen.affs.has(item.affiliate_link.trim())) return true;
+  if (item.product_url && seen.urls.has(normalizeText(item.product_url))) return true;
+  return seen.titles.some((t) => titleSimilarity(t, item.product_name) >= 0.8);
+}
+
 async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summary: AutopilotSummary): Promise<void> {
   const opportunities = run.product_opportunities;
   const candidates = [...run.sourced_candidates];
+  const diagnostics = [...run.sourcing_diagnostics];
   const attempted = new Set(candidates.map((c) => c.opportunity_index));
-  const todo = opportunities
-    .map((opp, idx) => ({ opp, idx }))
-    .filter(({ idx }) => !attempted.has(idx));
+  const todo = opportunities.map((opp, idx) => ({ opp, idx })).filter(({ idx }) => !attempted.has(idx));
 
   if (todo.length === 0) {
     await patchRun(supabase, run.id, { status: "CONVERTING_LINKS", current_step: "CONVERTING_LINKS" });
@@ -341,64 +403,99 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
     return;
   }
 
-  await insertPostingLog(supabase, null, LOG.SOURCING_STARTED, "SUCCESS", `Tìm sản phẩm cho ${Math.min(LIMITS.products(), todo.length)} cơ hội.`, { ai_campaign_run_id: run.id });
+  await insertPostingLog(supabase, null, LOG.SOURCING_STARTED, "SUCCESS", `Tìm sản phẩm cho ${Math.min(LIMITS.products(), todo.length)} cơ hội (lọc relevance).`, { ai_campaign_run_id: run.id });
 
+  const seen = await buildSeenIndex(supabase, NOVELTY_WINDOW_DAYS);
   const batch = todo.slice(0, LIMITS.products());
   const existingKeys = new Set(candidates.map((c) => c.key));
   let providerMissing = false;
   let lastError: string | null = null;
 
   for (const { opp, idx } of batch) {
-    const res = await searchShopeeProductsForCampaign({
-      product_keyword: opp.product_keyword,
-      category: opp.category,
-      target_customer: opp.target_customer,
-      suggested_price_range: opp.suggested_price_range,
-      search_keywords: opp.search_keywords,
-      reason: opp.reason,
-    });
+    const plan = expandQueries(opp);
+    const profile = inferCategoryProfile(opp);
+    const queries = [plan.primary_query, ...plan.secondary_queries];
+    const res = await searchRawProducts(queries, { limit: 10, category: opp.category ?? null, maxResults: 30 });
 
     if (!res.configured) {
       providerMissing = true;
       lastError = res.error;
-      // Đẩy sang thủ công + đánh dấu NEEDS_PROVIDER (đã "attempt").
       await pushToManualSourcing(supabase, run.id, opp, `Chưa cấu hình provider tìm sản phẩm: ${res.error ?? ""}`);
       candidates.push(makeCandidate(opp, idx, null, "NEEDS_PROVIDER"));
+      diagnostics.push(makeDiagnostic(opp, idx, queries, 0, 0, {}, [], [], res.provider, `Chưa cấu hình provider: ${res.error ?? ""}`));
       continue;
     }
-    if (!res.ok || res.results.length === 0) {
-      lastError = res.error;
-      candidates.push(makeCandidate(opp, idx, null, "LINK_CONVERSION_FAILED"));
-      await pushToManualSourcing(supabase, run.id, opp, `Không tìm thấy sản phẩm tự động: ${res.error ?? ""}`);
-      continue;
+
+    const rawItems = res.results;
+    const rejectionReasons: Record<string, number> = {};
+    const rejectedExamples: string[] = [];
+    const accepted: Array<{ item: SourcingSearchItem; score: number; reason: string }> = [];
+
+    for (const item of rawItems) {
+      const dup = isDuplicateRecent(item, seen);
+      const verdict = scoreRelevance(item, opp, profile, { requireImage: true, isDuplicateRecent: dup, allowRepeat: ALLOW_REPEAT_PRODUCTS });
+      if (verdict.accepted) {
+        accepted.push({ item, score: verdict.score, reason: verdict.accepted_reason ?? "" });
+      } else {
+        const reason = (verdict.rejected_reason ?? "LOW_RELEVANCE") as RejectionReason;
+        rejectionReasons[reason] = (rejectionReasons[reason] ?? 0) + 1;
+        if (rejectedExamples.length < 4) rejectedExamples.push(`${item.product_name} (${REJECTION_REASON_LABELS[reason]})`);
+      }
     }
-    // Chọn ứng viên tốt nhất, tránh trùng key.
-    const ranked = [...res.results].sort((a, b) => scoreSearchItem(b) - scoreSearchItem(a));
-    const chosen = ranked.find((it) => !existingKeys.has(candidateKey(it)));
-    if (!chosen) {
-      summary.skipped_count += 1;
-      candidates.push(makeCandidate(opp, idx, null, "LINK_CONVERSION_FAILED"));
-      continue;
+
+    accepted.sort((a, b) => b.score - a.score);
+    const chosen = accepted.find(({ item }) => !existingKeys.has(candidateKey(item)));
+    const topAccepted = accepted.slice(0, 3).map((a) => `${a.item.product_name} (${a.score})`);
+
+    if (chosen) {
+      existingKeys.add(candidateKey(chosen.item));
+      // Đưa title đã chấp nhận vào seen để cơ hội kế trong batch không chọn trùng.
+      seen.titles.push(chosen.item.product_name);
+      const cand = makeCandidate(opp, idx, chosen.item, "SOURCED");
+      cand.relevance_score = chosen.score;
+      cand.accepted_reason = chosen.reason;
+      candidates.push(cand);
+      summary.products_sourced += 1;
+      diagnostics.push(
+        makeDiagnostic(opp, idx, queries, rawItems.length, accepted.length, rejectionReasons, topAccepted, rejectedExamples, res.provider, `Chấp nhận: ${chosen.item.product_name} (score ${chosen.score}).`),
+      );
+    } else {
+      // accepted_count = 0 -> KHÔNG dùng sản phẩm xấu.
+      const c = makeCandidate(opp, idx, null, "NO_RELEVANT_PRODUCT");
+      c.rejected_reason = "LOW_RELEVANCE";
+      candidates.push(c);
+      const suggestions = suggestSpecificKeywords(opp);
+      await pushToManualSourcing(supabase, run.id, opp, `Không tìm thấy sản phẩm đủ liên quan (raw ${rawItems.length}). Gợi ý từ khóa: ${suggestions.join(", ")}`);
+      diagnostics.push(
+        makeDiagnostic(
+          opp,
+          idx,
+          queries,
+          rawItems.length,
+          0,
+          rejectionReasons,
+          [],
+          rejectedExamples,
+          res.provider,
+          `Không tìm thấy sản phẩm đủ liên quan. Thử từ khóa cụ thể hơn: ${suggestions.join(", ")}.`,
+        ),
+      );
     }
-    existingKeys.add(candidateKey(chosen));
-    candidates.push(makeCandidate(opp, idx, chosen, chosen.affiliate_link ? "SOURCED" : "SOURCED"));
-    summary.products_sourced += 1;
   }
 
-  // Nếu provider thiếu cho TẤT CẢ cơ hội còn lại: tạo placeholder + advance để không kẹt.
   if (providerMissing) {
-    const stillTodo = opportunities
-      .map((opp, idx) => ({ opp, idx }))
-      .filter(({ idx }) => !candidates.some((c) => c.opportunity_index === idx));
+    const stillTodo = opportunities.map((opp, idx) => ({ opp, idx })).filter(({ idx }) => !candidates.some((c) => c.opportunity_index === idx));
     for (const { opp, idx } of stillTodo) {
       await pushToManualSourcing(supabase, run.id, opp, "Chưa cấu hình provider tìm sản phẩm.");
       candidates.push(makeCandidate(opp, idx, null, "NEEDS_PROVIDER"));
+      diagnostics.push(makeDiagnostic(opp, idx, [], 0, 0, {}, [], [], "none", "Chưa cấu hình provider tìm sản phẩm."));
     }
   }
 
   const allAttempted = opportunities.every((_, idx) => candidates.some((c) => c.opportunity_index === idx));
   const patch: Record<string, unknown> = {
     sourced_candidates: candidates,
+    sourcing_diagnostics: diagnostics,
     progress_total: opportunities.length,
     progress_current: candidates.filter((c) => c.link_status === "SOURCED" || c.link_status === "READY").length,
   };
@@ -412,11 +509,40 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
     patch.current_step = "CONVERTING_LINKS";
   }
   await patchRun(supabase, run.id, patch);
-  await insertPostingLog(supabase, null, LOG.SOURCING_DONE, "SUCCESS", `Sourced ${summary.products_sourced} sản phẩm (batch).`, {
+  await insertPostingLog(supabase, null, LOG.SOURCING_DONE, "SUCCESS", `Sourced ${summary.products_sourced} sản phẩm đạt chuẩn (batch).`, {
     ai_campaign_run_id: run.id,
     sourced: summary.products_sourced,
   });
-  summary.message = `Đã tìm ${summary.products_sourced} sản phẩm.${lastError ? ` (Lưu ý: ${lastError})` : ""}`;
+  summary.message = `Đã tìm ${summary.products_sourced} sản phẩm đạt chuẩn.${lastError ? ` (Lưu ý: ${lastError})` : ""}`;
+}
+
+function makeDiagnostic(
+  opp: ProductOpportunity,
+  idx: number,
+  queries: string[],
+  rawCount: number,
+  acceptedCount: number,
+  rejectionReasons: Record<string, number>,
+  topAccepted: string[],
+  topRejected: string[],
+  provider: string,
+  message: string,
+): CampaignSourcingDiagnostic {
+  const rejectedCount = Object.values(rejectionReasons).reduce((a, b) => a + b, 0);
+  return {
+    opportunity_index: idx,
+    product_keyword: opp.product_keyword,
+    queries,
+    raw_count: rawCount,
+    accepted_count: acceptedCount,
+    rejected_count: rejectedCount,
+    rejection_reasons: rejectionReasons,
+    top_accepted: topAccepted,
+    top_rejected_examples: topRejected,
+    message,
+    provider,
+    created_at: new Date().toISOString(),
+  };
 }
 
 function makeCandidate(
@@ -444,6 +570,9 @@ function makeCandidate(
       link_status: linkStatus,
       product_id: null,
       score: 0,
+      relevance_score: null,
+      accepted_reason: null,
+      rejected_reason: null,
     };
   }
   return {
@@ -463,7 +592,10 @@ function makeCandidate(
     sub_id: null,
     link_status: linkStatus,
     product_id: null,
-    score: scoreSearchItem(item),
+    score: 0,
+    relevance_score: null,
+    accepted_reason: null,
+    rejected_reason: null,
   };
 }
 
@@ -802,6 +934,25 @@ async function stepCreatives(supabase: SupabaseClient, run: AiCampaignRun, summa
 // WAITING_POST_REVIEW
 // ---------------------------------------------------------------------------
 async function stepWaitingReview(supabase: SupabaseClient, run: AiCampaignRun, summary: AutopilotSummary): Promise<void> {
+  // Không có bài nào (vd: tất cả cơ hội đều không đủ liên quan) -> kết thúc, không kẹt.
+  const { data: anyPosts } = await supabase
+    .from("generated_posts")
+    .select("id")
+    .eq("ai_campaign_run_id", run.id)
+    .limit(1);
+  if (!anyPosts || anyPosts.length === 0) {
+    await patchRun(supabase, run.id, {
+      status: "COMPLETED",
+      current_step: "COMPLETED",
+      progress_current: 0,
+      error_message:
+        run.error_message ??
+        "Không tạo được bài: không tìm thấy sản phẩm đủ liên quan. Hãy chỉnh từ khóa cơ hội cụ thể hơn hoặc xử lý thủ công.",
+    });
+    summary.message = "Chiến dịch kết thúc: không có sản phẩm/bài phù hợp.";
+    return;
+  }
+
   const { data: approved } = await supabase
     .from("generated_posts")
     .select("id")

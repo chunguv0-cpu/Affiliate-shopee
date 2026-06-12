@@ -144,7 +144,7 @@ export default async function OpsPage() {
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Sourcing snapshot */}
-          <Section title="Sản phẩm cần tìm link" right={<Link href="/dashboard/sourcing" className="text-xs font-medium text-blue-600 hover:underline">Tìm link →</Link>}>
+          <Section title="Sản phẩm cần tìm link" right={<Link href="/dashboard/manual-tools?tab=sourcing" className="text-xs font-medium text-blue-600 hover:underline">Tìm link →</Link>}>
             {data.sourcing.length === 0 ? (
               <p className="text-sm text-gray-500">Không có sản phẩm nào đang chờ tìm link.</p>
             ) : (

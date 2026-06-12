@@ -7,9 +7,10 @@ import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { SourcingCandidate, SourcingStatus } from "@/lib/types";
 
-const SOURCING_PATH = "/dashboard/sourcing";
+// Phase 20: trang Tìm link / Affiliate links đã gộp vào "Công cụ thủ công".
+const SOURCING_PATH = "/dashboard/manual-tools";
 const PRODUCTS_PATH = "/dashboard/products";
-const LINKS_PATH = "/dashboard/affiliate-links";
+const LINKS_PATH = "/dashboard/manual-tools";
 const CONVERT_ACTION = "CONVERT_SOURCING_TO_PRODUCT";
 
 export type SimpleResult = { ok: true } | { ok: false; error: string };

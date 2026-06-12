@@ -9,24 +9,28 @@ export type NavItem = {
   icon: string;
 };
 
-/** Danh sách điều hướng của dashboard (tiếng Việt). */
+/**
+ * Danh sách điều hướng CHÍNH (Phase 20 — gọn gàng, 1 workflow rõ ràng).
+ * AI Autopilot là điểm bắt đầu chính. Các công cụ thủ công gộp vào "Công cụ thủ công".
+ */
 export const NAV_ITEMS: NavItem[] = [
   { label: "Tổng quan", href: "/dashboard", icon: "📊" },
-  { label: "Vận hành hôm nay", href: "/dashboard/ops", icon: "🎯" },
-  { label: "Tài khoản Shopee", href: "/dashboard/shopee-accounts", icon: "🔑" },
-  { label: "Sản phẩm", href: "/dashboard/products", icon: "🛍️" },
-  { label: "Affiliate Links", href: "/dashboard/affiliate-links", icon: "🔗" },
-  { label: "Nhập link", href: "/dashboard/import-products", icon: "📥" },
-  { label: "Chiến dịch", href: "/dashboard/campaigns", icon: "🚀" },
   { label: "AI Autopilot", href: "/dashboard/ai-autopilot", icon: "🤖" },
-  { label: "Gợi ý AI", href: "/dashboard/ai-planner", icon: "🧠" },
-  { label: "Tìm link", href: "/dashboard/sourcing", icon: "🧲" },
-  { label: "Bài đăng", href: "/dashboard/posts", icon: "📝" },
   { label: "Chờ duyệt bài", href: "/dashboard/review", icon: "✅" },
   { label: "Lịch đăng", href: "/dashboard/calendar", icon: "🗓️" },
   { label: "Hiệu quả", href: "/dashboard/analytics", icon: "📈" },
+  { label: "Sản phẩm", href: "/dashboard/products", icon: "🛍️" },
+  { label: "Công cụ thủ công", href: "/dashboard/manual-tools", icon: "🧰" },
+  { label: "Tài khoản Shopee", href: "/dashboard/shopee-accounts", icon: "🔑" },
   { label: "Cấu hình", href: "/dashboard/settings", icon: "⚙️" },
   { label: "Logs", href: "/dashboard/logs", icon: "📜" },
+];
+
+/** Mục phụ (vẫn truy cập được, không phải workflow chính). */
+export const SECONDARY_NAV_ITEMS: NavItem[] = [
+  { label: "Bài đăng", href: "/dashboard/posts", icon: "📝" },
+  { label: "Chiến dịch", href: "/dashboard/campaigns", icon: "🚀" },
+  { label: "Vận hành hôm nay", href: "/dashboard/ops", icon: "🎯" },
 ];
 
 type SidebarProps = {
@@ -84,6 +88,28 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 }`}
               >
                 <span className="text-lg" aria-hidden="true">
+                  {item.icon}
+                </span>
+                {item.label}
+              </Link>
+            );
+          })}
+
+          <div className="mt-3 px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+            Khác
+          </div>
+          {SECONDARY_NAV_ITEMS.map((item) => {
+            const active = isActive(pathname, item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={onClose}
+                className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                  active ? "bg-blue-50 text-blue-700" : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"
+                }`}
+              >
+                <span className="text-base" aria-hidden="true">
                   {item.icon}
                 </span>
                 {item.label}

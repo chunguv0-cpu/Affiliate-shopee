@@ -37,9 +37,16 @@ export default async function AiPlannerPage() {
 
   return (
     <div>
+      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+        <span>🤖 <strong>Gợi ý AI đã được gộp vào AI Autopilot</strong> — workflow tự động đầy đủ (gợi ý → duyệt → tìm sản phẩm → tạo bài → đăng).</span>
+        <Link href="/dashboard/ai-autopilot" className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700">
+          Mở AI Autopilot
+        </Link>
+      </div>
+
       <PageHeader
-        title="Gợi ý AI cho chiến dịch tuần"
-        description="AI phân tích sản phẩm, bài đã đăng và báo cáo affiliate để đề xuất chiến dịch nên chạy trong tuần."
+        title="Gợi ý AI cho chiến dịch tuần (cũ)"
+        description="Công cụ lập kế hoạch tuần trước đây. Vẫn dùng được, nhưng workflow chính giờ ở AI Autopilot."
       />
 
       <div className="mb-8 rounded-xl border border-gray-200 bg-white p-5">

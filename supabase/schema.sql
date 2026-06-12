@@ -478,6 +478,8 @@ create table if not exists ai_campaign_runs (
   progress_current     integer not null default 0,
   progress_total       integer not null default 0,
   paused               boolean not null default false,
+  -- Phase 20: chẩn đoán sourcing (query, raw/accepted/rejected, lý do loại).
+  sourcing_diagnostics jsonb default '[]'::jsonb,
   created_at           timestamptz not null default now(),
   updated_at           timestamptz not null default now(),
   constraint ai_campaign_runs_status_check check (status in (

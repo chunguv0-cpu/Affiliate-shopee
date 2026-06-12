@@ -99,9 +99,13 @@ export default function ShopeeAccountManager({ accounts }: { accounts: ShopeeAcc
         </div>
       ) : null}
 
-      {/* Quét & nhập sản phẩm */}
+      {/* Test tìm sản phẩm bằng API (chẩn đoán) */}
       <section className="rounded-xl border border-gray-200 bg-white p-5">
-        <h3 className="mb-3 text-base font-semibold text-gray-900">🔎 Tự quét &amp; nhập sản phẩm</h3>
+        <h3 className="mb-1 text-base font-semibold text-gray-900">🔎 Test tìm sản phẩm bằng API</h3>
+        <p className="mb-3 text-xs text-gray-500">
+          Công cụ <strong>chẩn đoán / nhập thủ công</strong> — kiểm tra API tài khoản trả về sản phẩm gì. Đây không phải workflow chính;
+          quy trình tự động (có lọc relevance) nằm ở <span className="font-medium text-blue-600">AI Autopilot</span>.
+        </p>
         {accounts.length === 0 ? (
           <p className="text-sm text-gray-500">Hãy thêm ít nhất 1 tài khoản Shopee bên dưới trước khi quét.</p>
         ) : (

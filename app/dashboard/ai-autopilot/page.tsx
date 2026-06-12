@@ -85,6 +85,7 @@ export default async function AiAutopilotPage() {
                 <div>
                   <h3 className="text-sm font-semibold text-gray-900">{run.title ?? "Chiến dịch"}</h3>
                   <p className="mt-0.5 text-xs text-gray-500">{run.objective}</p>
+                  {run.current_step ? <p className="mt-0.5 text-[11px] text-gray-400">Bước hiện tại: {run.current_step}</p> : null}
                 </div>
                 <div className="flex items-center gap-2">
                   {run.paused ? <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700">Tạm dừng</span> : null}
@@ -129,6 +130,32 @@ export default async function AiAutopilotPage() {
 
               {run.error_message ? (
                 <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">{run.error_message}</p>
+              ) : null}
+
+              {run.sourcing_diagnostics.length > 0 ? (
+                <details className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-2">
+                  <summary className="cursor-pointer text-xs font-medium text-gray-600">
+                    Chẩn đoán tìm sản phẩm ({run.sourcing_diagnostics.length})
+                  </summary>
+                  <div className="mt-2 space-y-2">
+                    {run.sourcing_diagnostics.slice(-12).map((d, i) => {
+                      const reasons = Object.entries(d.rejection_reasons);
+                      return (
+                        <div key={`${d.opportunity_index}-${i}`} className="rounded border border-gray-200 bg-white p-2 text-[11px] text-gray-600">
+                          <div className="font-medium text-gray-800">{d.product_keyword}</div>
+                          {d.queries.length > 0 ? <div className="text-gray-500">Query: {d.queries.slice(0, 5).join(" · ")}</div> : null}
+                          <div>
+                            Raw {d.raw_count} · Nhận {d.accepted_count} · Loại {d.rejected_count}
+                            {reasons.length > 0 ? ` (${reasons.map(([k, v]) => `${k}:${v}`).join(", ")})` : ""}
+                          </div>
+                          {d.top_accepted.length > 0 ? <div className="text-emerald-700">Nhận: {d.top_accepted.join("; ")}</div> : null}
+                          {d.top_rejected_examples.length > 0 ? <div className="text-rose-600">Loại: {d.top_rejected_examples.join("; ")}</div> : null}
+                          <div className="text-gray-500">{d.message}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
               ) : null}
 
               {/* Opportunities preview when waiting approval */}

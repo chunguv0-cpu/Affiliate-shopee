@@ -142,8 +142,7 @@ export async function importAffiliateLinksOnly(
   );
 
   revalidatePath("/dashboard/products");
-  revalidatePath("/dashboard/affiliate-links");
-  revalidatePath("/dashboard/import-products");
+  revalidatePath("/dashboard/manual-tools");
 
   return { ok: true, inserted, skipped, warnings, errors };
 }
