@@ -124,11 +124,18 @@ async function handle(request: Request) {
 
       // PART 2 — khóa campaign để tránh xử lý trùng khi cron chồng nhau.
       const lock = await acquireCampaignLock(supabase, row.id, cronRunId);
-      if (!lock.acquired) {
+      let lockedHere = false;
+      if (lock.error) {
+        // Cột khóa chưa có (chưa chạy migration add_perf_ops.sql) -> chạy KHÔNG khóa + cảnh báo.
+        loopErrors.push(`lock_unavailable: ${lock.error} (hãy chạy migration add_perf_ops.sql)`);
+        await insertPostingLog(supabase, null, "AUTOPILOT_CAMPAIGN_LOCK_UNAVAILABLE", "FAILED", `Không khóa được campaign (chạy không khóa). Hãy chạy migration add_perf_ops.sql. Chi tiết: ${lock.error}`.slice(0, 500), { ai_campaign_run_id: row.id });
+      } else if (!lock.acquired) {
         await insertPostingLog(supabase, null, "AUTOPILOT_CAMPAIGN_LOCK_SKIPPED", "SUCCESS", "Campaign đang được xử lý bởi cron khác, bỏ qua.", { ai_campaign_run_id: row.id });
         continue;
+      } else {
+        lockedHere = true;
+        await insertPostingLog(supabase, null, lock.takeover ? "AUTOPILOT_CAMPAIGN_LOCK_EXPIRED_TAKEOVER" : "AUTOPILOT_CAMPAIGN_LOCK_ACQUIRED", "SUCCESS", "Đã khóa campaign để xử lý.", { ai_campaign_run_id: row.id, cron_run_id: cronRunId });
       }
-      await insertPostingLog(supabase, null, lock.takeover ? "AUTOPILOT_CAMPAIGN_LOCK_EXPIRED_TAKEOVER" : "AUTOPILOT_CAMPAIGN_LOCK_ACQUIRED", "SUCCESS", "Đã khóa campaign để xử lý.", { ai_campaign_run_id: row.id, cron_run_id: cronRunId });
 
       const runStartedMs = Date.now();
       try {
@@ -187,8 +194,10 @@ async function handle(request: Request) {
           .update({ automation_error: m.slice(0, 500), last_cron_hit_at: new Date().toISOString(), cron_run_count: (row.cron_run_count ?? 0) + 1, updated_at: new Date().toISOString() })
           .eq("id", row.id);
       } finally {
-        await releaseCampaignLock(supabase, row.id, cronRunId);
-        await insertPostingLog(supabase, null, "AUTOPILOT_CAMPAIGN_LOCK_RELEASED", "SUCCESS", "Đã mở khóa campaign.", { ai_campaign_run_id: row.id });
+        if (lockedHere) {
+          await releaseCampaignLock(supabase, row.id, cronRunId);
+          await insertPostingLog(supabase, null, "AUTOPILOT_CAMPAIGN_LOCK_RELEASED", "SUCCESS", "Đã mở khóa campaign.", { ai_campaign_run_id: row.id });
+        }
       }
     }
 

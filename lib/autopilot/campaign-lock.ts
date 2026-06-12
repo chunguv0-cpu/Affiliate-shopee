@@ -14,7 +14,7 @@ export function lockTtlSeconds(): number {
   return Number.isFinite(n) ? Math.min(900, Math.max(30, n)) : 120;
 }
 
-export type LockResult = { acquired: boolean; takeover: boolean };
+export type LockResult = { acquired: boolean; takeover: boolean; error?: string | null };
 
 /**
  * Khóa campaign bằng 2 lần thử UPDATE có điều kiện (atomic):
@@ -39,6 +39,9 @@ export async function acquireCampaignLock(
     .eq("id", runId)
     .is("lock_expires_at", null)
     .select("id");
+  // Cột khóa chưa tồn tại (chưa chạy migration add_perf_ops.sql) -> trả error để cron
+  // chạy ở chế độ KHÔNG khóa (degrade) thay vì kẹt im lặng.
+  if (fresh.error) return { acquired: false, takeover: false, error: fresh.error.message };
   if (fresh.data && fresh.data.length > 0) return { acquired: true, takeover: false };
 
   // (2) Khóa khi khóa cũ đã hết hạn (takeover).
@@ -48,6 +51,7 @@ export async function acquireCampaignLock(
     .eq("id", runId)
     .lt("lock_expires_at", nowIso)
     .select("id");
+  if (expired.error) return { acquired: false, takeover: false, error: expired.error.message };
   if (expired.data && expired.data.length > 0) return { acquired: true, takeover: true };
 
   return { acquired: false, takeover: false };
