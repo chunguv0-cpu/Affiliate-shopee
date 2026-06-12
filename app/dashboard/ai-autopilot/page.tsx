@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import CampaignRunActions from "@/components/dashboard/autopilot/CampaignRunActions";
 import NewCampaignForm from "@/components/dashboard/autopilot/NewCampaignForm";
-import { getCampaignRuns } from "@/app/dashboard/ai-autopilot/actions";
+import { getCampaignFormOptions, getCampaignRuns } from "@/app/dashboard/ai-autopilot/actions";
 import { CAMPAIGN_RUN_STATUS_LABELS, type CampaignRunStatus } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -80,7 +80,7 @@ function compactJson(value: unknown): string {
 }
 
 export default async function AiAutopilotPage() {
-  const runs = await getCampaignRuns();
+  const [runs, formOptions] = await Promise.all([getCampaignRuns(), getCampaignFormOptions()]);
   const cronConfigured = Boolean(process.env.CRON_SECRET?.trim());
   const activeForCron = runs
     .map((x) => x.run)
@@ -119,7 +119,11 @@ export default async function AiAutopilotPage() {
         </p>
       </div>
 
-      <NewCampaignForm />
+      <NewCampaignForm
+        shopeeAccounts={formOptions.shopeeAccounts}
+        facebookPages={formOptions.facebookPages}
+        verticals={formOptions.verticals}
+      />
 
       <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -179,6 +183,19 @@ export default async function AiAutopilotPage() {
                   <h3 className="text-sm font-semibold text-gray-900">{run.title ?? "Chiến dịch"}</h3>
                   <p className="mt-0.5 text-xs text-gray-500">{run.objective}</p>
                   {run.current_step ? <p className="mt-0.5 text-[11px] text-gray-400">Bước hiện tại: {run.current_step}</p> : null}
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {run.user_keyword ? <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">Từ khóa: {run.user_keyword}</span> : null}
+                    {run.locked_vertical ? (
+                      <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700">
+                        Ngành: {run.locked_vertical}{run.vertical_confidence != null ? ` (${Math.round(run.vertical_confidence * 100)}%)` : ""}{run.keyword_lock_enabled ? " 🔒" : ""}
+                      </span>
+                    ) : null}
+                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">Shopee: {run.shopee_account_id ? "đã chọn" : "mặc định"}</span>
+                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">Page: {run.facebook_page_id ? "đã chọn" : "mặc định/env"}</span>
+                  </div>
+                  {run.needs_clarification && run.clarification_question ? (
+                    <p className="mt-1 rounded bg-orange-50 px-2 py-1 text-[11px] text-orange-700">⚠️ {run.clarification_question}</p>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-2">
                   {run.paused ? <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700">Tạm dừng</span> : null}

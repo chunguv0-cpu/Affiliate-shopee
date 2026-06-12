@@ -5,8 +5,21 @@ import { useState, useTransition } from "react";
 
 import { createCampaignPlanAction } from "@/app/dashboard/ai-autopilot/actions";
 
-export default function NewCampaignForm() {
+type Option = { id: string; label: string; is_default: boolean };
+type VerticalOption = { key: string; label: string };
+
+export default function NewCampaignForm({
+  shopeeAccounts = [],
+  facebookPages = [],
+  verticals = [],
+}: {
+  shopeeAccounts?: Option[];
+  facebookPages?: Option[];
+  verticals?: VerticalOption[];
+}) {
   const router = useRouter();
+  const defaultAccount = shopeeAccounts.find((a) => a.is_default)?.id ?? shopeeAccounts[0]?.id ?? "";
+  const defaultPage = facebookPages.find((p) => p.is_default)?.id ?? facebookPages[0]?.id ?? "";
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +75,39 @@ export default function NewCampaignForm() {
           <span className="mb-1 block font-medium text-gray-700">Loại sản phẩm muốn tránh (tùy chọn)</span>
           <input name="avoid_products" placeholder="VD: mỹ phẩm, thời trang nữ, phụ kiện nail" className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
         </label>
+        <label className="text-sm">
+          <span className="mb-1 block font-medium text-gray-700">Ngành hàng (khóa từ khóa)</span>
+          <select name="category_vertical" defaultValue="" className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+            <option value="">Tự động phát hiện từ mục tiêu</option>
+            {verticals.map((v) => (
+              <option key={v.key} value={v.key}>{v.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block font-medium text-gray-700">Tài khoản Shopee</span>
+          <select name="shopee_account_id" defaultValue={defaultAccount} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+            {shopeeAccounts.length === 0 ? <option value="">(Chưa có — dùng mặc định)</option> : null}
+            {shopeeAccounts.map((a) => (
+              <option key={a.id} value={a.id}>{a.label}{a.is_default ? " (mặc định)" : ""}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block font-medium text-gray-700">Facebook Page đăng bài</span>
+          <select name="facebook_page_id" defaultValue={defaultPage} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+            {facebookPages.length === 0 ? <option value="">(Chưa có — dùng env/Page mặc định)</option> : null}
+            {facebookPages.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}{p.is_default ? " (mặc định)" : ""}</option>
+            ))}
+          </select>
+        </label>
       </div>
+      {(shopeeAccounts.length === 0 || facebookPages.length === 0) ? (
+        <p className="mt-2 text-xs text-amber-600">
+          Mẹo: thêm Tài khoản Shopee và Facebook Page ở mục <strong>Tài khoản &amp; Page</strong> để chọn theo từng chiến dịch.
+        </p>
+      ) : null}
       <div className="mt-3 flex items-center gap-3">
         <button
           type="submit"

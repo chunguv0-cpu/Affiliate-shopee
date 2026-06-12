@@ -1,6 +1,7 @@
 import "server-only";
 
 import { isShopeeAffiliateLink, slugify } from "@/lib/affiliate";
+import { resolveShopeeAccount } from "@/lib/shopee/account-resolver";
 import { generateAffiliateShortLink, type ShopeeApiCredential } from "@/lib/shopee/affiliate-api";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
@@ -26,6 +27,8 @@ export type ConvertLinkInput = {
   index: number;
   sub_id?: string | null;
   source?: string | null;
+  /** Phase 21 — tài khoản Shopee của chiến dịch. */
+  shopeeAccountId?: string | null;
 };
 
 export type ConvertLinkResult = {
@@ -87,7 +90,9 @@ export async function convertProductUrlToAffiliateLink(input: ConvertLinkInput):
   }
 
   if (provider === "shopee_api") {
-    const cred = await getDefaultShopeeCredential();
+    const supabase = createSupabaseAdminClient();
+    const resolved = await resolveShopeeAccount(supabase, input.shopeeAccountId ?? null);
+    const cred = resolved.credential ?? (await getDefaultShopeeCredential());
     if (!cred) {
       return { ok: false, configured: false, affiliate_link: null, sub_id: subId, original_url: originalUrl, error: "Chưa có tài khoản Shopee ACTIVE để chuyển link." };
     }

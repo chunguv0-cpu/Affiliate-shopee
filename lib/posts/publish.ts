@@ -5,6 +5,7 @@ import {
   publishPhotoToFacebookPage,
   publishToFacebookPage,
 } from "@/lib/facebook/client";
+import { resolveFacebookPage } from "@/lib/facebook/page-resolver";
 import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { FacebookPublishType, GeneratedPostStatus, PublishMode } from "@/lib/types";
@@ -49,7 +50,7 @@ export async function publishGeneratedPostById(
     const { data, error } = await supabase
       .from("generated_posts")
       .select(
-        "id, caption, status, should_publish, ai_score, review_status, ai_campaign_run_id, creative_status, creative_image_url, facebook_publish_type, publish_mode, creative_pack_status, products(affiliate_link)",
+        "id, caption, status, should_publish, ai_score, review_status, ai_campaign_run_id, facebook_page_id, creative_status, creative_image_url, facebook_publish_type, publish_mode, creative_pack_status, products(affiliate_link)",
       )
       .eq("id", postId)
       .single();
@@ -66,6 +67,7 @@ export async function publishGeneratedPostById(
       ai_score: number | null;
       review_status: string | null;
       ai_campaign_run_id: string | null;
+      facebook_page_id: string | null;
       creative_status: string | null;
       creative_image_url: string | null;
       facebook_publish_type: string | null;
@@ -121,6 +123,29 @@ export async function publishGeneratedPostById(
       ? row.products[0]
       : row.products;
     const affiliateLink = productRel?.affiliate_link ?? null;
+
+    // 2b) Phase 21 — phân giải Facebook Page: post -> campaign -> default -> env.
+    let campaignPageId: string | null = null;
+    if (row.ai_campaign_run_id) {
+      const { data: runRow } = await supabase
+        .from("ai_campaign_runs")
+        .select("facebook_page_id")
+        .eq("id", row.ai_campaign_run_id)
+        .maybeSingle();
+      campaignPageId = (runRow?.facebook_page_id as string | null) ?? null;
+    }
+    const resolvedPage = await resolveFacebookPage(supabase, {
+      postPageId: row.facebook_page_id,
+      campaignPageId,
+    });
+    if (!resolvedPage.credential) {
+      const msg = "Chưa có Facebook Page để đăng (chưa chọn Page, chưa có Page mặc định và thiếu env fallback).";
+      await insertPostingLog(supabase, postId, "FACEBOOK_PAGE_TOKEN_MISSING", "FAILED", msg, {
+        facebook_page_id: row.facebook_page_id,
+        ai_campaign_run_id: row.ai_campaign_run_id,
+      });
+      return { ok: false, error: msg };
+    }
 
     // 3) CLAIM chống đăng trùng: chỉ chuyển READY -> PUBLISHING một cách atomic.
     //    Nếu không có row nào được cập nhật => bài đã/đang được xử lý bởi luồng khác.
@@ -203,16 +228,18 @@ export async function publishGeneratedPostById(
 
     // 4) Gọi Facebook Graph API (ALBUM / PHOTO / FEED).
     try {
+      const page = resolvedPage.credential;
       const result =
         effective === "ALBUM"
-          ? await publishPhotoAlbumToFacebookPage({ imageUrls: albumUrls, caption, affiliateLink })
+          ? await publishPhotoAlbumToFacebookPage({ imageUrls: albumUrls, caption, affiliateLink, page })
           : effective === "PHOTO"
             ? await publishPhotoToFacebookPage({
                 imageUrl: row.creative_image_url as string,
                 caption,
                 affiliateLink,
+                page,
               })
-            : await publishToFacebookPage({ caption, affiliateLink });
+            : await publishToFacebookPage({ caption, affiliateLink, page });
 
       await supabase
         .from("generated_posts")
@@ -245,8 +272,14 @@ export async function publishGeneratedPostById(
         postId,
         logAction,
         "SUCCESS",
-        "Đăng Facebook thành công.",
-        result.rawResponse,
+        `Đăng Facebook thành công lên Page ${resolvedPage.page_name ?? resolvedPage.page_id ?? "?"} (nguồn: ${resolvedPage.source}).`,
+        {
+          facebook_page_id: resolvedPage.facebook_page_id,
+          page_id: resolvedPage.page_id,
+          page_name: resolvedPage.page_name,
+          page_source: resolvedPage.source,
+          facebook_post_id: result.postId,
+        },
       );
 
       return {

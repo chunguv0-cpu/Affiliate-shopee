@@ -9,11 +9,26 @@ import "server-only";
  * - KHÔNG log token, KHÔNG đưa token vào error message.
  */
 
+/** Thông tin Page để đăng (Phase 21 — cho phép chọn Page, fallback env). */
+export type FacebookPageCredential = {
+  pageId: string;
+  accessToken: string;
+};
+
 /** Dữ liệu đầu vào để đăng một bài lên Facebook Page. */
 export type FacebookPublishInput = {
   caption: string;
   affiliateLink?: string | null;
+  /** Phase 21 — Page cụ thể. Nếu thiếu sẽ fallback env FACEBOOK_PAGE_ID/TOKEN. */
+  page?: FacebookPageCredential | null;
 };
+
+/** Lấy credential Page: ưu tiên tham số, fallback env. KHÔNG log token. */
+function resolvePageCreds(page?: FacebookPageCredential | null): { pageId: string | undefined; accessToken: string | undefined } {
+  const pageId = page?.pageId?.trim() || process.env.FACEBOOK_PAGE_ID?.trim();
+  const accessToken = page?.accessToken?.trim() || process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim();
+  return { pageId, accessToken };
+}
 
 /** Dữ liệu đầu vào để đăng một bài ẢNH (Phase 17). */
 export type FacebookPhotoPublishInput = FacebookPublishInput & {
@@ -41,11 +56,10 @@ const GRAPH_API_VERSION = "v24.0";
 export async function publishToFacebookPage(
   input: FacebookPublishInput,
 ): Promise<FacebookPublishResult> {
-  const pageId = process.env.FACEBOOK_PAGE_ID?.trim();
-  const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim();
+  const { pageId, accessToken } = resolvePageCreds(input.page);
 
   if (!pageId || !accessToken) {
-    throw new Error("Thiếu FACEBOOK_PAGE_ID hoặc FACEBOOK_PAGE_ACCESS_TOKEN.");
+    throw new Error("Thiếu cấu hình Facebook Page (chưa chọn Page và chưa có env fallback).");
   }
 
   const caption = input.caption?.trim();
@@ -154,10 +168,9 @@ async function readFbJson(response: Response, action: string): Promise<Record<st
 export async function publishPhotoAlbumToFacebookPage(
   input: FacebookAlbumPublishInput,
 ): Promise<FacebookPublishResult> {
-  const pageId = process.env.FACEBOOK_PAGE_ID?.trim();
-  const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim();
+  const { pageId, accessToken } = resolvePageCreds(input.page);
   if (!pageId || !accessToken) {
-    throw new Error("Thiếu FACEBOOK_PAGE_ID hoặc FACEBOOK_PAGE_ACCESS_TOKEN.");
+    throw new Error("Thiếu cấu hình Facebook Page (chưa chọn Page và chưa có env fallback).");
   }
   const caption = input.caption?.trim();
   if (!caption) throw new Error("Caption rỗng, không thể đăng.");
@@ -236,11 +249,10 @@ export async function publishPhotoAlbumToFacebookPage(
 export async function publishPhotoToFacebookPage(
   input: FacebookPhotoPublishInput,
 ): Promise<FacebookPublishResult> {
-  const pageId = process.env.FACEBOOK_PAGE_ID?.trim();
-  const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim();
+  const { pageId, accessToken } = resolvePageCreds(input.page);
 
   if (!pageId || !accessToken) {
-    throw new Error("Thiếu FACEBOOK_PAGE_ID hoặc FACEBOOK_PAGE_ACCESS_TOKEN.");
+    throw new Error("Thiếu cấu hình Facebook Page (chưa chọn Page và chưa có env fallback).");
   }
   const caption = input.caption?.trim();
   if (!caption) {

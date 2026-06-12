@@ -7,7 +7,7 @@ import { searchProductOffers, type ShopeeApiCredential } from "@/lib/shopee/affi
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { ShopeeAccount } from "@/lib/types";
 
-const PATH = "/dashboard/shopee-accounts";
+const PATH = "/dashboard/accounts";
 
 export type SimpleResult = { ok: true } | { ok: false; error: string };
 export type AccountsResult = { ok: true; accounts: ShopeeAccount[] } | { ok: false; error: string };

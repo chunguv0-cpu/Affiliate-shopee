@@ -69,9 +69,11 @@ export async function GET() {
         automation_error: r.automation_error,
       }));
 
-    const [{ count: pendingAiJobs }, { count: failedAiJobs }] = await Promise.all([
+    const [{ count: pendingAiJobs }, { count: failedAiJobs }, shopeeAccounts, facebookPages] = await Promise.all([
       supabase.from("ai_jobs").select("id", { count: "exact", head: true }).in("status", ["PENDING", "RUNNING", "WAITING_RETRY"]),
       supabase.from("ai_jobs").select("id", { count: "exact", head: true }).eq("status", "FAILED"),
+      supabase.from("shopee_accounts").select("id", { count: "exact", head: true }).eq("status", "ACTIVE"),
+      supabase.from("facebook_pages").select("id", { count: "exact", head: true }).eq("status", "ACTIVE"),
     ]);
 
     return NextResponse.json({
@@ -85,6 +87,8 @@ export async function GET() {
       stuck_campaigns: stuck,
       pending_ai_jobs_count: pendingAiJobs ?? 0,
       failed_ai_jobs_count: failedAiJobs ?? 0,
+      configured_shopee_accounts_count: shopeeAccounts.count ?? 0,
+      configured_facebook_pages_count: facebookPages.count ?? 0,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Lỗi không xác định.";

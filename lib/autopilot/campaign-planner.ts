@@ -22,6 +22,9 @@ export type CampaignPlanInput = {
   /** Phase 20 — tránh lặp sản phẩm/nhóm đã dùng gần đây. */
   excluded_recent_products?: string[];
   already_used_categories?: string[];
+  /** Phase 21 — khóa ngành: seeds cụ thể + nhãn ngành để AI/mock bám đúng. */
+  vertical_label?: string | null;
+  vertical_seeds?: string[];
 };
 
 const NOVELTY_WINDOW_DAYS = (() => {
@@ -92,6 +95,9 @@ function buildUserPrompt(input: CampaignPlanInput): string {
     input.target_customer ? `Tệp khách hàng: ${input.target_customer}` : "Tệp khách hàng: (tự xác định)",
     input.preferred_price_range ? `Mức giá mong muốn: ${input.preferred_price_range}` : "Mức giá mong muốn: (linh hoạt theo sản phẩm)",
     input.avoid_products ? `Loại sản phẩm muốn tránh: ${input.avoid_products}` : "Loại sản phẩm muốn tránh: (không chỉ định)",
+    input.vertical_label
+      ? `NGÀNH HÀNG KHÓA (RÀNG BUỘC CỨNG): ${input.vertical_label}. TẤT CẢ product_opportunities PHẢI thuộc đúng ngành này. TUYỆT ĐỐI không đề xuất sản phẩm ngành khác. Tham khảo ví dụ: ${(input.vertical_seeds ?? []).slice(0, 8).join(", ")}.`
+      : "Ngành hàng: (tự xác định theo mục tiêu, nhưng phải nhất quán 1 ngành).",
     "",
     excluded.length > 0
       ? `Sản phẩm/ý tưởng ĐÃ DÙNG gần đây (TRÁNH lặp lại): ${excluded.join("; ")}`
@@ -194,9 +200,22 @@ const SEED_OPPORTUNITIES: ProductOpportunity[] = [
 
 function mockPlan(input: CampaignPlanInput): CampaignPlanResult {
   const excludedNorm = new Set((input.excluded_recent_products ?? []).map((s) => normalizeForMatch(s)));
+  // Phase 21: nếu có seed theo ngành khóa -> CHỈ dùng seed ngành đó (đảm bảo đúng vertical).
+  const verticalPool: ProductOpportunity[] = (input.vertical_seeds ?? []).map((seed) => ({
+    product_keyword: seed,
+    category: input.vertical_label ?? null,
+    reason: `Sản phẩm phổ biến trong ngành ${input.vertical_label ?? ""}`.trim(),
+    target_customer: input.target_customer ?? null,
+    pain_point: null,
+    expected_content_angle: null,
+    suggested_price_range: input.preferred_price_range ?? null,
+    search_keywords: [seed],
+    priority: "medium",
+  }));
+  const basePool = verticalPool.length >= 4 ? verticalPool : SEED_OPPORTUNITIES;
   // Loại các seed đã dùng gần đây.
-  let pool = SEED_OPPORTUNITIES.filter((o) => !excludedNorm.has(normalizeForMatch(o.product_keyword)));
-  if (pool.length < 6) pool = SEED_OPPORTUNITIES; // không còn đủ -> dùng full để vẫn có gợi ý.
+  let pool = basePool.filter((o) => !excludedNorm.has(normalizeForMatch(o.product_keyword)));
+  if (pool.length < 4) pool = basePool; // không còn đủ -> dùng full để vẫn có gợi ý.
   // Xoay vòng để mỗi lần gợi ý ra tập khác nhau (theo số sản phẩm đã loại trừ).
   const offset = (input.excluded_recent_products?.length ?? 0) % pool.length;
   const rotated = [...pool.slice(offset), ...pool.slice(0, offset)];

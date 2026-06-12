@@ -21,7 +21,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Hiệu quả", href: "/dashboard/analytics", icon: "📈" },
   { label: "Sản phẩm", href: "/dashboard/products", icon: "🛍️" },
   { label: "Công cụ thủ công", href: "/dashboard/manual-tools", icon: "🧰" },
-  { label: "Tài khoản Shopee", href: "/dashboard/shopee-accounts", icon: "🔑" },
+  { label: "Tài khoản & Page", href: "/dashboard/accounts", icon: "🔑" },
   { label: "Cấu hình", href: "/dashboard/settings", icon: "⚙️" },
   { label: "Logs", href: "/dashboard/logs", icon: "📜" },
 ];

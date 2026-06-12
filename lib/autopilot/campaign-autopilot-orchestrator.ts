@@ -8,17 +8,18 @@ import {
   searchRawProducts,
   type SourcingSearchItem,
 } from "@/lib/autopilot/product-sourcing-provider";
+import { normalizeText, titleSimilarity } from "@/lib/autopilot/product-relevance";
 import {
-  expandQueries,
-  inferCategoryProfile,
-  isBroadOpportunity,
-  normalizeText,
-  REJECTION_REASON_LABELS,
-  scoreRelevance,
-  suggestSpecificKeywords,
-  titleSimilarity,
-  type RejectionReason,
-} from "@/lib/autopilot/product-relevance";
+  classifyVertical,
+  isBroadKeyword,
+  type Vertical,
+} from "@/lib/autopilot/campaign-vertical";
+import {
+  scoreProductForVertical,
+  VERTICAL_REJECTION_LABELS,
+  type VerticalRejectionReason,
+} from "@/lib/autopilot/vertical-guardrails";
+import { expandVerticalQueries, suggestSpecificKeywords } from "@/lib/autopilot/query-expansion";
 import { scheduleApprovedPostsForRun } from "@/lib/autopilot/scheduler";
 import { runAiJobStep } from "@/lib/jobs/ai-job-runner";
 import { insertPostingLog } from "@/lib/posts/log";
@@ -225,6 +226,22 @@ export function parseCampaignRunRow(row: Record<string, unknown>): AiCampaignRun
     automation_error: (row.automation_error as string | null) ?? null,
     automation_attempts: Number(row.automation_attempts) || 0,
     paused: Boolean(row.paused),
+    // Phase 21.
+    shopee_account_id: (row.shopee_account_id as string | null) ?? null,
+    facebook_page_id: (row.facebook_page_id as string | null) ?? null,
+    user_keyword: (row.user_keyword as string | null) ?? null,
+    user_objective: (row.user_objective as string | null) ?? null,
+    user_category_hint: (row.user_category_hint as string | null) ?? null,
+    locked_vertical: (row.locked_vertical as string | null) ?? null,
+    vertical_confidence: row.vertical_confidence === null || row.vertical_confidence === undefined ? null : Number(row.vertical_confidence),
+    keyword_lock_enabled: row.keyword_lock_enabled !== false,
+    allowed_terms: asArray<string>(row.allowed_terms),
+    negative_terms: asArray<string>(row.negative_terms),
+    allowed_categories: asArray<string>(row.allowed_categories),
+    blocked_categories: asArray<string>(row.blocked_categories),
+    suggested_specific_queries: asArray<string>(row.suggested_specific_queries),
+    needs_clarification: Boolean(row.needs_clarification),
+    clarification_question: (row.clarification_question as string | null) ?? null,
     created_at: String(row.created_at ?? ""),
     updated_at: String(row.updated_at ?? ""),
   };
@@ -524,6 +541,14 @@ function isDuplicateRecent(item: SourcingSearchItem, seen: SeenIndex): boolean {
   return seen.titles.some((t) => titleSimilarity(t, item.product_name) >= 0.8);
 }
 
+/** Ngành đã khóa của chiến dịch (DB -> phân loại lại từ keyword/objective nếu thiếu). */
+function resolveLockedVertical(run: AiCampaignRun): Vertical {
+  const stored = (run.locked_vertical ?? "").trim();
+  if (stored) return stored as Vertical;
+  const text = `${run.user_keyword ?? ""} ${run.objective ?? ""} ${run.title ?? ""}`.trim();
+  return classifyVertical(text).vertical;
+}
+
 async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summary: AutopilotSummary): Promise<void> {
   const opportunities = run.product_opportunities;
   const candidates = [...run.sourced_candidates];
@@ -537,7 +562,19 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
     return;
   }
 
-  await insertPostingLog(supabase, null, LOG.SOURCING_STARTED, "SUCCESS", `Tìm sản phẩm cho ${Math.min(LIMITS.products(), todo.length)} cơ hội (lọc relevance).`, { ai_campaign_run_id: run.id });
+  // Khóa ngành: nếu chưa xác định ngành -> dừng, yêu cầu làm rõ (không source bừa).
+  const lockedVertical = resolveLockedVertical(run);
+  if (run.keyword_lock_enabled !== false && lockedVertical === "UNKNOWN") {
+    const msg = "Chưa xác định được ngành hàng của từ khóa. Hãy chọn nhóm sản phẩm cho chiến dịch rồi chạy lại.";
+    await patchRun(supabase, run.id, { needs_clarification: true, clarification_question: msg, error_message: msg, automation_error: msg, next_auto_run_at: null });
+    summary.ok = false;
+    summary.errors.push(msg);
+    summary.message = msg;
+    return;
+  }
+  const broadKeyword = isBroadKeyword(run.user_keyword ?? run.objective ?? "");
+
+  await insertPostingLog(supabase, null, LOG.SOURCING_STARTED, "SUCCESS", `Tìm sản phẩm (ngành ${lockedVertical}) cho ${Math.min(LIMITS.products(), todo.length)} cơ hội.`, { ai_campaign_run_id: run.id, locked_vertical: lockedVertical });
 
   const seen = await buildSeenIndex(supabase, NOVELTY_WINDOW_DAYS);
   const batch = todo.slice(0, LIMITS.products());
@@ -546,10 +583,13 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
   let lastError: string | null = null;
 
   for (const { opp, idx } of batch) {
-    const plan = expandQueries(opp);
-    const profile = inferCategoryProfile(opp);
-    const queries = [plan.primary_query, ...plan.secondary_queries];
-    const res = await searchRawProducts(queries, { limit: 10, category: opp.category ?? null, maxResults: 30 });
+    const queries = expandVerticalQueries(lockedVertical, opp).all;
+    const res = await searchRawProducts(queries, {
+      limit: 10,
+      category: opp.category ?? null,
+      maxResults: 30,
+      shopeeAccountId: run.shopee_account_id,
+    });
 
     if (!res.configured) {
       providerMissing = true;
@@ -568,19 +608,20 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
 
     for (const item of rawItems) {
       const dup = isDuplicateRecent(item, seen);
-      const verdict = scoreRelevance(item, opp, profile, {
+      const verdict = scoreProductForVertical(item, lockedVertical, opp, {
         requireImage: true,
         isDuplicateRecent: dup,
         allowRepeat: ALLOW_REPEAT_PRODUCTS,
-        minScore: isBroadOpportunity(opp) ? 70 : undefined,
+        broadKeyword,
       });
       if (verdict.accepted) {
         accepted.push({ item, score: verdict.score, reason: verdict.accepted_reason ?? "" });
+        await insertPostingLog(supabase, null, "PRODUCT_ACCEPTED_BY_RELEVANCE", "SUCCESS", `${item.product_name} (score ${verdict.score})`.slice(0, 300), { ai_campaign_run_id: run.id });
       } else {
-        const reason = (verdict.rejected_reason ?? "LOW_RELEVANCE") as RejectionReason;
+        const reason = (verdict.rejected_reason ?? "LOW_RELEVANCE") as VerticalRejectionReason;
         rejectionReasons[reason] = (rejectionReasons[reason] ?? 0) + 1;
-        if (verdict.negative_hit) negativeHits.add(verdict.negative_hit);
-        if (rejectedExamples.length < 4) rejectedExamples.push(`${item.product_name} (${REJECTION_REASON_LABELS[reason]}, score ${verdict.score})`);
+        for (const b of verdict.blocked_terms) negativeHits.add(b);
+        if (rejectedExamples.length < 4) rejectedExamples.push(`${item.product_name} (${VERTICAL_REJECTION_LABELS[reason]}, score ${verdict.score})`);
       }
     }
 
@@ -605,7 +646,7 @@ async function stepSourcing(supabase: SupabaseClient, run: AiCampaignRun, summar
       const c = makeCandidate(opp, idx, null, "NO_RELEVANT_PRODUCT");
       c.rejected_reason = "LOW_RELEVANCE";
       candidates.push(c);
-      const suggestions = suggestSpecificKeywords(opp);
+      const suggestions = suggestSpecificKeywords(lockedVertical);
       await pushToManualSourcing(supabase, run.id, opp, `Không tìm thấy sản phẩm đủ liên quan (raw ${rawItems.length}). Gợi ý từ khóa: ${suggestions.join(", ")}`, "MANUAL_REQUIRED");
       diagnostics.push(
         makeDiagnostic(
@@ -801,6 +842,7 @@ async function stepConvert(supabase: SupabaseClient, run: AiCampaignRun, summary
       existing_offer_link: cand.affiliate_link,
       campaign_slug: slug,
       index: globalIdx + 1,
+      shopeeAccountId: run.shopee_account_id,
     });
     const target = candidates.find((c) => c.key === cand.key);
     if (!target) continue;
@@ -1011,6 +1053,7 @@ async function stepCreatePosts(supabase: SupabaseClient, run: AiCampaignRun, sum
       progress_total: 7,
       related_product_id: p.id as string,
       ai_campaign_run_id: run.id,
+      facebook_page_id: run.facebook_page_id,
       input: {
         product_name: (p.product_name as string) ?? "Sản phẩm",
         original_url: (p.original_url as string | null) ?? null,
@@ -1018,6 +1061,8 @@ async function stepCreatePosts(supabase: SupabaseClient, run: AiCampaignRun, sum
         target_customer: (p.target_customer as string | null) ?? null,
         product_angle: (p.product_angle as string | null) ?? null,
         price_note: (p.price_note as string | null) ?? null,
+        facebook_page_id: run.facebook_page_id,
+        shopee_account_id: run.shopee_account_id,
       },
     });
     if (error) {
@@ -1061,6 +1106,7 @@ async function stepCreatives(supabase: SupabaseClient, run: AiCampaignRun, summa
         progress_total: 7,
         related_product_id: p.id as string,
         ai_campaign_run_id: run.id,
+        facebook_page_id: run.facebook_page_id,
         input: {
           product_name: (p.product_name as string) ?? "Sản phẩm",
           original_url: (p.original_url as string | null) ?? null,
@@ -1068,6 +1114,8 @@ async function stepCreatives(supabase: SupabaseClient, run: AiCampaignRun, summa
           target_customer: (p.target_customer as string | null) ?? null,
           product_angle: (p.product_angle as string | null) ?? null,
           price_note: (p.price_note as string | null) ?? null,
+          facebook_page_id: run.facebook_page_id,
+          shopee_account_id: run.shopee_account_id,
         },
       });
       summary.creative_jobs_started += 1;

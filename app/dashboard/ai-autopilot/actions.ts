@@ -8,9 +8,28 @@ import {
   parseCampaignRunRow,
   runCampaignAutopilotUntilBlocked,
 } from "@/lib/autopilot/campaign-autopilot-orchestrator";
+import {
+  VERTICAL_LABELS,
+  VERTICAL_PROFILES,
+  classifyVertical,
+  profileFor,
+  type Vertical,
+} from "@/lib/autopilot/campaign-vertical";
+import { validateOpportunitiesForVertical, verticalFallbackOpportunities } from "@/lib/autopilot/opportunity-validator";
 import { insertPostingLog } from "@/lib/posts/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { AiCampaignRun, CampaignRunCounters } from "@/lib/types";
+
+const ALL_VERTICAL_KEYS = Object.keys(VERTICAL_PROFILES) as Vertical[];
+
+/** Xác định ngành: ưu tiên người dùng chọn (hint = key ngành), nếu không thì phân loại. */
+function resolveCampaignVertical(objective: string, hint: string | null): { vertical: Vertical; confidence: number } {
+  if (hint && ALL_VERTICAL_KEYS.includes(hint as Vertical)) {
+    return { vertical: hint as Vertical, confidence: 1 };
+  }
+  const c = classifyVertical(`${objective} ${hint ?? ""}`);
+  return { vertical: c.vertical, confidence: c.confidence };
+}
 
 const PATH = "/dashboard/ai-autopilot";
 
@@ -68,6 +87,50 @@ async function gatherNoveltyContext(
   return { excluded: Array.from(excluded).slice(0, 60), usedCategories: Array.from(usedCategories).slice(0, 20) };
 }
 
+export type CampaignFormOptions = {
+  shopeeAccounts: Array<{ id: string; label: string; is_default: boolean }>;
+  facebookPages: Array<{ id: string; label: string; is_default: boolean }>;
+  verticals: Array<{ key: string; label: string }>;
+};
+
+/** Tùy chọn cho form tạo chiến dịch: tài khoản Shopee, Page, ngành hàng. */
+export async function getCampaignFormOptions(): Promise<CampaignFormOptions> {
+  const verticals = ALL_VERTICAL_KEYS.filter((k) => k !== "UNKNOWN").map((k) => ({ key: k, label: VERTICAL_LABELS[k] }));
+  try {
+    const supabase = createSupabaseAdminClient();
+    const { data: accs } = await supabase
+      .from("shopee_accounts")
+      .select("id, label, name, is_default, status")
+      .eq("status", "ACTIVE")
+      .order("is_default", { ascending: false })
+      .limit(50);
+    const shopeeAccounts = ((accs ?? []) as Array<Record<string, unknown>>).map((a) => ({
+      id: String(a.id),
+      label: String(a.name ?? a.label ?? "Tài khoản Shopee"),
+      is_default: Boolean(a.is_default),
+    }));
+    let facebookPages: CampaignFormOptions["facebookPages"] = [];
+    try {
+      const { data: pages } = await supabase
+        .from("facebook_pages")
+        .select("id, name, page_name, is_default, status")
+        .eq("status", "ACTIVE")
+        .order("is_default", { ascending: false })
+        .limit(50);
+      facebookPages = ((pages ?? []) as Array<Record<string, unknown>>).map((p) => ({
+        id: String(p.id),
+        label: String(p.name ?? p.page_name ?? "Facebook Page"),
+        is_default: Boolean(p.is_default),
+      }));
+    } catch {
+      // bảng facebook_pages có thể chưa migrate -> bỏ qua, dùng env fallback.
+    }
+    return { shopeeAccounts, facebookPages, verticals };
+  } catch {
+    return { shopeeAccounts: [], facebookPages: [], verticals };
+  }
+}
+
 /** Tạo gợi ý chiến dịch AI (chưa tạo sản phẩm) -> WAITING_APPROVAL. */
 export async function createCampaignPlanAction(fd: FormData): Promise<CreatePlanResult> {
   const objective = text(fd, "objective");
@@ -78,6 +141,18 @@ export async function createCampaignPlanAction(fd: FormData): Promise<CreatePlan
   const targetCustomer = text(fd, "target_customer");
   const preferredPriceRange = text(fd, "preferred_price_range");
   const avoidProducts = text(fd, "avoid_products");
+  const shopeeAccountId = text(fd, "shopee_account_id");
+  const facebookPageId = text(fd, "facebook_page_id");
+  const categoryHint = text(fd, "category_vertical"); // người dùng chọn ngành (tùy chọn)
+
+  // Phase 21 — khóa ngành từ keyword/objective (+ hint nếu user chọn).
+  const { vertical, confidence } = resolveCampaignVertical(objective, categoryHint);
+  const profile = profileFor(vertical);
+  const lockedLabel = vertical === "UNKNOWN" ? null : VERTICAL_LABELS[vertical];
+  const needsClarification = vertical === "UNKNOWN" || confidence < 0.6;
+  const clarificationQuestion = needsClarification
+    ? "Chưa xác định rõ ngành hàng từ từ khóa. Hãy chọn ngành sản phẩm cho chiến dịch (ô 'Ngành hàng') rồi tạo lại để hệ thống tìm đúng sản phẩm."
+    : null;
 
   try {
     const supabase = createSupabaseAdminClient();
@@ -108,7 +183,28 @@ export async function createCampaignPlanAction(fd: FormData): Promise<CreatePlan
       avoid_products: avoidProducts,
       excluded_recent_products: novelty.excluded,
       already_used_categories: novelty.usedCategories,
+      vertical_label: lockedLabel,
+      vertical_seeds: profile?.seeds ?? [],
     });
+
+    // Phase 21 — KHÓA NGÀNH: loại cơ hội lệch ngành; bù seed ngành nếu thiếu.
+    let opportunities = plan.product_opportunities;
+    if (vertical !== "UNKNOWN") {
+      const { valid } = validateOpportunitiesForVertical(opportunities, vertical);
+      opportunities = valid;
+      if (opportunities.length < 4) {
+        const fallback = verticalFallbackOpportunities(vertical);
+        const seen = new Set(opportunities.map((o) => o.product_keyword.toLowerCase()));
+        for (const f of fallback) {
+          if (opportunities.length >= 8) break;
+          if (!seen.has(f.product_keyword.toLowerCase())) {
+            opportunities.push(f);
+            seen.add(f.product_keyword.toLowerCase());
+          }
+        }
+      }
+    }
+
     const { data, error } = await supabase
       .from("ai_campaign_runs")
       .insert({
@@ -124,16 +220,32 @@ export async function createCampaignPlanAction(fd: FormData): Promise<CreatePlan
           preferred_price_range: preferredPriceRange,
           avoid_products: avoidProducts,
         },
-        product_opportunities: plan.product_opportunities,
+        product_opportunities: opportunities,
         posting_plan: plan.posting_plan,
         creative_direction: plan.creative_direction,
         budget_note: preferredPriceRange,
         current_step: "WAITING_APPROVAL",
-        progress_total: plan.product_opportunities.length,
+        progress_total: opportunities.length,
         progress_current: 0,
         is_autopilot_enabled: false,
         next_auto_run_at: null,
         automation_error: null,
+        // Phase 21 — account/page + keyword lock.
+        shopee_account_id: shopeeAccountId,
+        facebook_page_id: facebookPageId,
+        user_keyword: objective,
+        user_objective: objective,
+        user_category_hint: categoryHint,
+        locked_vertical: vertical,
+        vertical_confidence: confidence,
+        keyword_lock_enabled: true,
+        allowed_terms: profile?.allowed ?? [],
+        negative_terms: profile?.negative ?? [],
+        allowed_categories: lockedLabel ? [lockedLabel] : [],
+        blocked_categories: [],
+        suggested_specific_queries: profile?.seeds ?? [],
+        needs_clarification: needsClarification,
+        clarification_question: clarificationQuestion,
       })
       .select("id")
       .single();
@@ -224,6 +336,26 @@ export async function approveCampaignRun(id: string): Promise<SimpleResult> {
   try {
     const supabase = createSupabaseAdminClient();
     const now = new Date().toISOString();
+
+    // Phase 21 — chặn duyệt khi chưa rõ ngành hoặc chưa chọn tài khoản Shopee.
+    const { data: pre } = await supabase
+      .from("ai_campaign_runs")
+      .select("needs_clarification, locked_vertical, shopee_account_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (pre) {
+      if (pre.needs_clarification || !pre.locked_vertical || pre.locked_vertical === "UNKNOWN") {
+        return { ok: false, error: "Chưa xác định ngành hàng. Hãy tạo lại chiến dịch và chọn 'Ngành hàng' trước khi duyệt." };
+      }
+      if (!pre.shopee_account_id) {
+        // Cho duyệt nếu có tài khoản mặc định ACTIVE; nếu không thì chặn.
+        const { data: acc } = await supabase.from("shopee_accounts").select("id").eq("status", "ACTIVE").limit(1);
+        if (!acc || acc.length === 0) {
+          return { ok: false, error: "Chưa có tài khoản Shopee ACTIVE. Hãy thêm/chọn tài khoản ở 'Tài khoản & Page' trước khi duyệt." };
+        }
+      }
+    }
+
     const { error } = await supabase
       .from("ai_campaign_runs")
       .update({

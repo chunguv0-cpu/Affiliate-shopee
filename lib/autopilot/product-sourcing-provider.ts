@@ -1,5 +1,6 @@
 import "server-only";
 
+import { resolveShopeeAccount } from "@/lib/shopee/account-resolver";
 import { searchProductOffers, type ShopeeApiCredential } from "@/lib/shopee/affiliate-api";
 import { isLikelyProductImage, normalizeImageUrl } from "@/lib/shopee/image-url";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -166,7 +167,7 @@ async function customApiSearchOne(keyword: string, limit: number, category: stri
  */
 export async function searchRawProducts(
   queries: string[],
-  opts: { limit?: number; category?: string | null; maxResults?: number } = {},
+  opts: { limit?: number; category?: string | null; maxResults?: number; shopeeAccountId?: string | null } = {},
 ): Promise<SourcingSearchResult> {
   const provider = getProductSearchProvider();
   const limit = Math.max(1, Math.min(20, opts.limit ?? 10));
@@ -183,14 +184,17 @@ export async function searchRawProducts(
 
   let cred: ShopeeApiCredential | null = null;
   if (provider === "shopee_api") {
-    cred = await getDefaultShopeeCredential();
+    // Phase 21: ưu tiên tài khoản chiến dịch chọn, fallback mặc định.
+    const supabase = createSupabaseAdminClient();
+    const resolved = await resolveShopeeAccount(supabase, opts.shopeeAccountId ?? null);
+    cred = resolved.credential ?? (await getDefaultShopeeCredential());
     if (!cred) {
       return {
         ok: false,
         configured: false,
         provider,
         results: [],
-        error: "Chưa có tài khoản Shopee ACTIVE. Thêm tài khoản ở mục 'Tài khoản Shopee'.",
+        error: "Chưa có tài khoản Shopee ACTIVE. Thêm tài khoản ở mục 'Tài khoản & Page'.",
       };
     }
   }

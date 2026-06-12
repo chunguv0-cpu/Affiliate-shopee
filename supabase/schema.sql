@@ -86,6 +86,70 @@ create trigger trg_campaigns_updated_at
   execute function update_updated_at_column();
 
 -- =============================================================================
+-- 1c) shopee_accounts (Phase 21) — nhiều tài khoản Shopee, API riêng từng tài khoản.
+-- =============================================================================
+create table if not exists shopee_accounts (
+  id               uuid primary key default gen_random_uuid(),
+  label            text not null,
+  name             text,
+  account_label    text,
+  provider         text default 'shopee_api',
+  app_id           text not null,
+  app_secret       text not null,
+  shop_id          text,
+  partner_id       text,
+  api_endpoint     text default 'https://open-api.affiliate.shopee.vn/graphql',
+  api_base_url     text,
+  access_token     text,
+  refresh_token    text,
+  token_expires_at timestamptz,
+  is_default       boolean not null default false,
+  status           text not null default 'ACTIVE',
+  note             text,
+  notes            text,
+  last_used_at     timestamptz,
+  last_test_at     timestamptz,
+  last_test_result jsonb,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  constraint shopee_accounts_status_check check (status in ('ACTIVE', 'DISABLED', 'EXPIRED', 'ERROR'))
+);
+create index if not exists idx_shopee_accounts_status on shopee_accounts (status);
+create index if not exists idx_shopee_accounts_default on shopee_accounts (is_default);
+drop trigger if exists trg_shopee_accounts_updated_at on shopee_accounts;
+create trigger trg_shopee_accounts_updated_at
+  before update on shopee_accounts
+  for each row
+  execute function update_updated_at_column();
+
+-- =============================================================================
+-- 1d) facebook_pages (Phase 21) — nhiều Page Facebook, token chỉ dùng server-side.
+-- =============================================================================
+create table if not exists facebook_pages (
+  id                       uuid primary key default gen_random_uuid(),
+  name                     text not null,
+  page_id                  text not null,
+  page_name                text,
+  page_access_token        text not null,
+  token_expires_at         timestamptz,
+  status                   text not null default 'ACTIVE',
+  is_default               boolean not null default false,
+  notes                    text,
+  last_publish_test_at     timestamptz,
+  last_publish_test_result jsonb,
+  created_at               timestamptz not null default now(),
+  updated_at               timestamptz not null default now(),
+  constraint facebook_pages_status_check check (status in ('ACTIVE', 'DISABLED', 'EXPIRED', 'ERROR'))
+);
+create index if not exists idx_facebook_pages_status on facebook_pages (status);
+create index if not exists idx_facebook_pages_default on facebook_pages (is_default);
+drop trigger if exists trg_facebook_pages_updated_at on facebook_pages;
+create trigger trg_facebook_pages_updated_at
+  before update on facebook_pages
+  for each row
+  execute function update_updated_at_column();
+
+-- =============================================================================
 -- 2) generated_posts
 -- =============================================================================
 create table if not exists generated_posts (
@@ -118,6 +182,14 @@ create table if not exists generated_posts (
   publish_mode          text default 'FEED',
   creative_summary      text,
   creative_error        text,
+  -- Phase 19/21: review queue + campaign account/page selection.
+  review_status         text default 'PENDING_REVIEW',
+  approved_at           timestamptz,
+  automation_status     text,
+  auto_scheduled        boolean not null default false,
+  ai_campaign_run_id    uuid,
+  facebook_page_id      uuid references facebook_pages (id) on delete set null,
+  shopee_account_id     uuid references shopee_accounts (id) on delete set null,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   constraint generated_posts_status_check
@@ -133,7 +205,9 @@ create table if not exists generated_posts (
   constraint generated_posts_creative_pack_mode_check
     check (creative_pack_mode in ('AUTO', 'FOUND_ONLY', 'GENERATED_ONLY', 'MIXED')),
   constraint generated_posts_publish_mode_check
-    check (publish_mode in ('FEED', 'PHOTO_ALBUM', 'VIDEO'))
+    check (publish_mode in ('FEED', 'PHOTO_ALBUM', 'VIDEO')),
+  constraint generated_posts_review_status_check
+    check (review_status in ('PENDING_REVIEW', 'APPROVED', 'REJECTED', 'NEEDS_EDIT'))
 );
 
 -- Phase 17 V2: bảng asset ảnh của bài.
@@ -171,6 +245,9 @@ create index if not exists idx_generated_posts_campaign_id  on generated_posts (
 create index if not exists idx_generated_posts_status       on generated_posts (status);
 create index if not exists idx_generated_posts_scheduled_at on generated_posts (scheduled_at);
 create index if not exists idx_generated_posts_created_at   on generated_posts (created_at desc);
+create index if not exists idx_generated_posts_ai_campaign_run on generated_posts (ai_campaign_run_id);
+create index if not exists idx_generated_posts_facebook_page   on generated_posts (facebook_page_id);
+create index if not exists idx_generated_posts_review_status   on generated_posts (review_status);
 
 drop trigger if exists trg_generated_posts_updated_at on generated_posts;
 create trigger trg_generated_posts_updated_at
@@ -400,30 +477,6 @@ create trigger trg_sourcing_updated_at
   execute function update_updated_at_column();
 
 -- =============================================================================
--- 8b) shopee_accounts (Phase 18) — nhiều tài khoản Shopee, API riêng từng tài khoản.
--- =============================================================================
-create table if not exists shopee_accounts (
-  id            uuid primary key default gen_random_uuid(),
-  label         text not null,
-  app_id        text not null,
-  app_secret    text not null,
-  api_endpoint  text default 'https://open-api.affiliate.shopee.vn/graphql',
-  is_default    boolean not null default false,
-  status        text not null default 'ACTIVE',
-  note          text,
-  last_used_at  timestamptz,
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now(),
-  constraint shopee_accounts_status_check check (status in ('ACTIVE', 'DISABLED'))
-);
-create index if not exists idx_shopee_accounts_status on shopee_accounts (status);
-drop trigger if exists trg_shopee_accounts_updated_at on shopee_accounts;
-create trigger trg_shopee_accounts_updated_at
-  before update on shopee_accounts
-  for each row
-  execute function update_updated_at_column();
-
--- =============================================================================
 -- 9) ai_jobs (Foundation) — hàng đợi job AI nặng, chạy theo từng bước nhỏ.
 -- =============================================================================
 create table if not exists ai_jobs (
@@ -435,6 +488,8 @@ create table if not exists ai_jobs (
   progress_total      int not null default 0,
   related_product_id  uuid references products (id) on delete set null,
   related_post_id     uuid references generated_posts (id) on delete set null,
+  ai_campaign_run_id  uuid,
+  facebook_page_id    uuid references facebook_pages (id) on delete set null,
   input               jsonb default '{}'::jsonb,
   output              jsonb default '{}'::jsonb,
   error_message       text,
@@ -453,6 +508,7 @@ create index if not exists idx_ai_jobs_status      on ai_jobs (status);
 create index if not exists idx_ai_jobs_job_type    on ai_jobs (job_type);
 create index if not exists idx_ai_jobs_product     on ai_jobs (related_product_id);
 create index if not exists idx_ai_jobs_post        on ai_jobs (related_post_id);
+create index if not exists idx_ai_jobs_campaign_run on ai_jobs (ai_campaign_run_id);
 create index if not exists idx_ai_jobs_created_at  on ai_jobs (created_at desc);
 
 drop trigger if exists trg_ai_jobs_updated_at on ai_jobs;
@@ -488,6 +544,21 @@ create table if not exists ai_campaign_runs (
   progress_current     integer not null default 0,
   progress_total       integer not null default 0,
   paused               boolean not null default false,
+  shopee_account_id    uuid references shopee_accounts (id) on delete set null,
+  facebook_page_id     uuid references facebook_pages (id) on delete set null,
+  user_keyword         text,
+  user_objective       text,
+  user_category_hint   text,
+  locked_vertical      text,
+  vertical_confidence  numeric,
+  keyword_lock_enabled boolean not null default true,
+  allowed_terms        jsonb default '[]'::jsonb,
+  negative_terms       jsonb default '[]'::jsonb,
+  allowed_categories   jsonb default '[]'::jsonb,
+  blocked_categories   jsonb default '[]'::jsonb,
+  suggested_specific_queries jsonb default '[]'::jsonb,
+  needs_clarification  boolean not null default false,
+  clarification_question text,
   is_autopilot_enabled boolean not null default true,
   auto_started_at      timestamptz,
   last_auto_run_at     timestamptz,
@@ -513,6 +584,8 @@ create index if not exists idx_ai_campaign_runs_status     on ai_campaign_runs (
 create index if not exists idx_ai_campaign_runs_created_at  on ai_campaign_runs (created_at desc);
 create index if not exists idx_ai_campaign_runs_autopilot_enabled on ai_campaign_runs (is_autopilot_enabled, status, next_auto_run_at);
 create index if not exists idx_ai_campaign_runs_last_cron_hit on ai_campaign_runs (last_cron_hit_at desc);
+create index if not exists idx_ai_campaign_runs_shopee_account on ai_campaign_runs (shopee_account_id);
+create index if not exists idx_ai_campaign_runs_facebook_page on ai_campaign_runs (facebook_page_id);
 
 alter table post_creative_assets add column if not exists ai_campaign_run_id uuid references ai_campaign_runs (id) on delete set null;
 create index if not exists idx_pca_campaign_run on post_creative_assets (ai_campaign_run_id);

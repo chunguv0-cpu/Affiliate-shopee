@@ -353,7 +353,10 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       target_customer?: string | null;
       product_angle?: string | null;
       price_note?: string | null;
+      facebook_page_id?: string | null;
+      shopee_account_id?: string | null;
     };
+    const jobFacebookPageId = (job as { facebook_page_id?: string | null }).facebook_page_id ?? input.facebook_page_id ?? null;
 
     // ---------- INIT ----------
     if (step === "INIT") {
@@ -362,6 +365,8 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         .insert({
           product_id: job.related_product_id,
           ai_campaign_run_id: job.ai_campaign_run_id ?? null,
+          facebook_page_id: jobFacebookPageId,
+          shopee_account_id: input.shopee_account_id ?? null,
           status: "DRAFT",
           should_publish: false,
           ai_score: 0,

@@ -3,7 +3,7 @@ export type ProductStatus = "NEW" | "ACTIVE" | "PAUSED" | "ARCHIVED";
 // ===========================================================================
 // Phase 18 — Quản lý tài khoản Shopee (API riêng từng tài khoản)
 // ===========================================================================
-export type ShopeeAccountStatus = "ACTIVE" | "DISABLED";
+export type ShopeeAccountStatus = "ACTIVE" | "DISABLED" | "EXPIRED" | "ERROR";
 
 /** Tài khoản Shopee (KHÔNG bao giờ trả app_secret ra client). */
 export type ShopeeAccount = {
@@ -141,6 +141,7 @@ export type AiJob = {
   related_product_id: string | null;
   related_post_id: string | null;
   ai_campaign_run_id?: string | null;
+  facebook_page_id?: string | null;
   input: unknown;
   output: unknown;
   error_message: string | null;
@@ -259,6 +260,9 @@ export type GeneratedPost = {
   automation_status?: string | null;
   auto_scheduled?: boolean | null;
   ai_campaign_run_id?: string | null;
+  // Phase 21 — selected page/account.
+  facebook_page_id?: string | null;
+  shopee_account_id?: string | null;
   created_at: string;
   updated_at: string;
   products?: {
@@ -566,6 +570,40 @@ export type AiCampaignRun = {
   automation_error: string | null;
   automation_attempts: number;
   paused: boolean;
+  // Phase 21 — account/page selection + keyword lock.
+  shopee_account_id: string | null;
+  facebook_page_id: string | null;
+  user_keyword: string | null;
+  user_objective: string | null;
+  user_category_hint: string | null;
+  locked_vertical: string | null;
+  vertical_confidence: number | null;
+  keyword_lock_enabled: boolean;
+  allowed_terms: string[];
+  negative_terms: string[];
+  allowed_categories: string[];
+  blocked_categories: string[];
+  suggested_specific_queries: string[];
+  needs_clarification: boolean;
+  clarification_question: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Phase 21 — một Page Facebook (KHÔNG bao giờ trả page_access_token ra client). */
+export type FacebookPageStatus = "ACTIVE" | "DISABLED" | "EXPIRED" | "ERROR";
+export type FacebookPage = {
+  id: string;
+  name: string;
+  page_id: string;
+  page_name: string | null;
+  token_masked: string | null;
+  token_expires_at: string | null;
+  status: FacebookPageStatus;
+  is_default: boolean;
+  notes: string | null;
+  last_publish_test_at: string | null;
+  last_publish_test_result: unknown;
   created_at: string;
   updated_at: string;
 };
