@@ -161,6 +161,22 @@ function enqueue(task) {
   return run;
 }
 
+/** Lưu ảnh chụp + thông tin trang khi lỗi để chẩn đoán (KHÔNG log cookie). */
+async function dumpDebug(page, label) {
+  let url = "";
+  let title = "";
+  try {
+    url = page.url();
+    title = await page.title().catch(() => "");
+    await page.screenshot({ path: "last-error.png", fullPage: false }).catch(() => {});
+    fs.writeFileSync("last-error.html", await page.content().catch(() => ""));
+  } catch {
+    /* ignore */
+  }
+  console.error(`[grok-worker] LỖI: ${label} | url=${url} | title=${title} | đã lưu last-error.png + last-error.html`);
+  return { url, title };
+}
+
 /** Sinh 1 ảnh từ prompt. Trả { b64 } hoặc { error }. */
 async function generateImage(prompt) {
   await ensureBrowser();
@@ -171,7 +187,12 @@ async function generateImage(prompt) {
 
     // TODO: chỉnh các bước này theo UI Grok hiện tại.
     const promptBox = page.locator(SEL_PROMPT).first();
-    await promptBox.waitFor({ state: "visible", timeout: NAV_TIMEOUT });
+    try {
+      await promptBox.waitFor({ state: "visible", timeout: NAV_TIMEOUT });
+    } catch {
+      const d = await dumpDebug(page, "Không thấy ô nhập prompt (sai GROK_PROMPT_SELECTOR, hoặc bị Cloudflare/đăng nhập)");
+      return { error: `Không thấy ô nhập prompt. Trang hiện tại: ${d.title || d.url}. Xem last-error.png.` };
+    }
     await promptBox.fill(prompt);
 
     // Gửi: thử nút submit, nếu không có thì Enter.
@@ -181,9 +202,14 @@ async function generateImage(prompt) {
 
     // Chờ ảnh kết quả xuất hiện.
     const img = page.locator(SEL_IMAGE).last();
-    await img.waitFor({ state: "visible", timeout: GEN_TIMEOUT });
+    try {
+      await img.waitFor({ state: "visible", timeout: GEN_TIMEOUT });
+    } catch {
+      const d = await dumpDebug(page, "Không thấy ảnh kết quả (sai GROK_IMAGE_SELECTOR hoặc Grok không trả ảnh)");
+      return { error: `Không thấy ảnh kết quả. Trang: ${d.title || d.url}. Xem last-error.png.` };
+    }
     const src = await img.getAttribute("src");
-    if (!src) return { error: "Không tìm thấy ảnh kết quả (chỉnh GROK_IMAGE_SELECTOR)." };
+    if (!src) return { error: "Ảnh kết quả không có src (chỉnh GROK_IMAGE_SELECTOR)." };
 
     // Tải ảnh về dạng base64 (qua chính phiên đăng nhập).
     const resp = await context.request.get(src);
@@ -191,6 +217,7 @@ async function generateImage(prompt) {
     const buf = await resp.body();
     return { b64: Buffer.from(buf).toString("base64") };
   } catch (err) {
+    await dumpDebug(page, "Exception khi tạo ảnh").catch(() => {});
     return { error: (err && err.message ? String(err.message) : "Grok worker lỗi").slice(0, 300) };
   } finally {
     await page.close().catch(() => {});
