@@ -18,15 +18,62 @@ import fs from "node:fs";
 import express from "express";
 import { chromium } from "playwright";
 
+// Nạp ./.env (không cần thư viện). Chạy: cd grok-worker && node index.mjs
+(function loadDotenv() {
+  try {
+    if (!fs.existsSync(".env")) return;
+    for (const line of fs.readFileSync(".env", "utf8").split(/\r?\n/)) {
+      const s = line.trim();
+      if (!s || s.startsWith("#")) continue;
+      const i = s.indexOf("=");
+      if (i < 0) continue;
+      const key = s.slice(0, i).trim();
+      let val = s.slice(i + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) val = val.slice(1, -1);
+      if (key && process.env[key] === undefined) process.env[key] = val;
+    }
+  } catch {
+    /* ignore */
+  }
+})();
+
 const PORT = Number(process.env.PORT || 8080);
 const SECRET = (process.env.GROK_GATEWAY_SECRET || "").trim();
 const GROK_URL = (process.env.GROK_URL || "https://grok.com/").trim();
 const USER_AGENT =
   (process.env.GROK_USER_AGENT || "").trim() ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
-const PROXY = (process.env.GROK_PROXY || "").trim(); // http://user:pass@host:port
 const NAV_TIMEOUT = Number(process.env.GROK_NAV_TIMEOUT_MS || 60000);
 const GEN_TIMEOUT = Number(process.env.GROK_GEN_TIMEOUT_MS || 90000);
+
+/**
+ * Parse proxy về dạng Playwright cần: { server, username?, password? }.
+ * Hỗ trợ: http://user:pass@host:port | user:pass:host:port | host:port:user:pass | host:port
+ */
+function parseProxy(raw) {
+  const v = (raw || "").trim();
+  if (!v) return null;
+  if (/^(https?|socks5):\/\//i.test(v)) {
+    try {
+      const u = new URL(v);
+      const server = `${u.protocol}//${u.host}`;
+      const username = u.username ? decodeURIComponent(u.username) : undefined;
+      const password = u.password ? decodeURIComponent(u.password) : undefined;
+      return username ? { server, username, password } : { server };
+    } catch {
+      return { server: v };
+    }
+  }
+  const p = v.split(":");
+  if (p.length === 2) return { server: `http://${p[0]}:${p[1]}` };
+  if (p.length >= 4) {
+    // host:port:user:pass  (phần 2 là số)  vs  user:pass:host:port (phần 4 là số)
+    if (/^\d+$/.test(p[1])) return { server: `http://${p[0]}:${p[1]}`, username: p[2], password: p.slice(3).join(":") };
+    if (/^\d+$/.test(p[3])) return { server: `http://${p[2]}:${p[3]}`, username: p[0], password: p[1] };
+  }
+  return { server: v };
+}
+const PROXY_CONFIG = parseProxy(process.env.GROK_PROXY);
 
 // Selector — CHỈNH theo giao diện grok.com hiện tại.
 const SEL_PROMPT = process.env.GROK_PROMPT_SELECTOR || 'textarea';
@@ -94,7 +141,7 @@ async function ensureBrowser() {
   if (browser && context) return;
   browser = await chromium.launch({
     headless: true,
-    ...(PROXY ? { proxy: { server: PROXY } } : {}),
+    ...(PROXY_CONFIG ? { proxy: PROXY_CONFIG } : {}),
     args: ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
   });
   context = await browser.newContext({ userAgent: USER_AGENT, viewport: { width: 1280, height: 900 } });
@@ -177,5 +224,5 @@ app.post("/generate", async (req, res) => {
 
 app.listen(PORT, () => {
   // KHÔNG log cookie/secret.
-  console.log(`[grok-worker] listening on :${PORT} (proxy: ${PROXY ? "on" : "off"}, auth: ${SECRET ? "on" : "off"})`);
+  console.log(`[grok-worker] listening on :${PORT} (proxy: ${PROXY_CONFIG ? "on" : "off"}, auth: ${SECRET ? "on" : "off"})`);
 });
