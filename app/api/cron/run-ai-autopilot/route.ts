@@ -77,6 +77,7 @@ async function handle(request: Request) {
 
     const results: AutopilotLoopSummary[] = [];
     for (const row of runRows) {
+      const runStartedMs = Date.now();
       const summary = await runCampaignAutopilotUntilBlocked({
         campaignRunId: row.id,
         trigger: "cron",
@@ -94,7 +95,7 @@ async function handle(request: Request) {
       await supabase
         .from("ai_campaign_runs")
         .update({
-          last_cron_hit_at: nowIso,
+          last_cron_hit_at: new Date().toISOString(),
           cron_run_count: (row.cron_run_count ?? 0) + 1,
           last_cron_result: {
             ok: summary.ok,
@@ -111,10 +112,10 @@ async function handle(request: Request) {
             scheduled_count: summary.scheduled_count,
             errors: summary.errors.slice(0, 5),
           },
-          last_auto_run_at: nowIso,
-          next_auto_run_at: blocked ? null : new Date(Date.now() + nextDelaySeconds * 1000).toISOString(),
+          last_auto_run_at: new Date(runStartedMs).toISOString(),
+          next_auto_run_at: blocked ? null : new Date(runStartedMs + nextDelaySeconds * 1000).toISOString(),
           automation_error: summary.ok ? null : summary.errors.join("; ").slice(0, 800),
-          updated_at: nowIso,
+          updated_at: new Date().toISOString(),
         })
         .eq("id", row.id);
     }

@@ -102,8 +102,14 @@ export default async function AiAutopilotPage() {
       .map((r) => r.next_auto_run_at)
       .filter((x): x is string => typeof x === "string" && x.length > 0)
       .sort()[0] ?? null;
+  const nowMs = Date.now();
   const lastCronMs = lastCronHit ? new Date(lastCronHit).getTime() : NaN;
-  const cronStale = activeForCron.length > 0 && (!Number.isFinite(lastCronMs) || Date.now() - lastCronMs > 5 * 60 * 1000);
+  const hasRecentCronHit = Number.isFinite(lastCronMs) && nowMs - lastCronMs <= 5 * 60 * 1000;
+  const hasDueCampaign = activeForCron.some((r) => {
+    const nextMs = r.next_auto_run_at ? new Date(r.next_auto_run_at).getTime() : NaN;
+    return !Number.isFinite(nextMs) || nextMs <= nowMs;
+  });
+  const cronStale = activeForCron.length > 0 && hasDueCampaign && !hasRecentCronHit;
   const totalCronRuns = activeForCron.reduce((sum, r) => sum + r.cron_run_count, 0);
 
   return (
@@ -171,11 +177,20 @@ export default async function AiAutopilotPage() {
           const acceptedFromDiagnostics = run.sourcing_diagnostics.reduce((sum, d) => sum + d.accepted_count, 0);
           const rejectedFromDiagnostics = run.sourcing_diagnostics.reduce((sum, d) => sum + d.rejected_count, 0);
           const lastCronMsForRun = run.last_cron_hit_at ? new Date(run.last_cron_hit_at).getTime() : NaN;
+          const nextAutoMsForRun = run.next_auto_run_at ? new Date(run.next_auto_run_at).getTime() : NaN;
+          const runWaitingForNextCron =
+            CRON_ACTIVE_STATUSES.includes(run.status) &&
+            run.is_autopilot_enabled &&
+            !run.paused &&
+            Number.isFinite(lastCronMsForRun) &&
+            Number.isFinite(nextAutoMsForRun) &&
+            nextAutoMsForRun > nowMs;
           const runCronStale =
             CRON_ACTIVE_STATUSES.includes(run.status) &&
             run.is_autopilot_enabled &&
             !run.paused &&
-            (!Number.isFinite(lastCronMsForRun) || Date.now() - lastCronMsForRun > 5 * 60 * 1000);
+            !runWaitingForNextCron &&
+            (!Number.isFinite(lastCronMsForRun) || nowMs - lastCronMsForRun > 5 * 60 * 1000);
           return (
             <div key={run.id} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-2">
@@ -252,6 +267,12 @@ export default async function AiAutopilotPage() {
               {runCronStale ? (
                 <p className="mt-2 rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-700">
                   Cron chưa chạy thật. Hãy cấu hình cron-job.org hoặc Vercel Cron gọi /api/cron/run-ai-autopilot mỗi phút.
+                </p>
+              ) : null}
+
+              {runWaitingForNextCron ? (
+                <p className="mt-2 rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  Cron da chay va dang cho batch tiep theo o moc Next auto run.
                 </p>
               ) : null}
 
