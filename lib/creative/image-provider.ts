@@ -35,8 +35,10 @@ export type GeneratedImage = {
 export function getImageProvider(): ImageProvider {
   const raw = process.env.IMAGE_PROVIDER?.trim().toLowerCase();
   if (raw === "grok_gateway" || raw === "openai" || raw === "v98" || raw === "none" || raw === "mock") return raw;
-  // Mặc định: ưu tiên V98 (nếu đang dùng), rồi OpenAI, cuối cùng mock.
-  if (process.env.V98_API_KEY?.trim() && process.env.V98_BASE_URL?.trim()) return "v98";
+  // Mặc định: ưu tiên V98 (key ảnh riêng hoặc key chung), rồi OpenAI, cuối cùng mock.
+  const v98ImgKey = process.env.V98_IMAGE_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
+  const v98ImgBase = process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
+  if (v98ImgKey && v98ImgBase) return "v98";
   if (process.env.OPENAI_API_KEY?.trim()) return "openai";
   return "mock";
 }
@@ -129,8 +131,8 @@ function readIntEnv(name: string, fallback: number, min: number, max: number): n
 
 export function getImageProviderConfig(): ImageProviderConfig {
   const provider = getImageProvider();
-  const hasV98Key = !!process.env.V98_API_KEY?.trim();
-  const v98BaseUrl = process.env.V98_BASE_URL?.trim() || null;
+  const hasV98Key = !!(process.env.V98_IMAGE_API_KEY?.trim() || process.env.V98_API_KEY?.trim());
+  const v98BaseUrl = process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim() || null;
   const errors: string[] = [];
   let imageModel: string | null = null;
 
@@ -157,9 +159,9 @@ function resolveImageConfig(
   provider: ImageProvider,
 ): { apiKey: string; baseURL?: string; model: string } | null {
   if (provider === "v98") {
-    const apiKey = process.env.V98_API_KEY?.trim();
-    const baseURL = process.env.V98_BASE_URL?.trim();
-    // V98 dùng model ảnh riêng (KHÔNG dùng V98_MODEL vốn là model text gpt-5.5).
+    // 2 KEY tách biệt: ảnh dùng V98_IMAGE_* (fallback V98_* cũ). KHÔNG dùng key prompt cho ảnh.
+    const apiKey = process.env.V98_IMAGE_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
+    const baseURL = process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
     const model = process.env.V98_IMAGE_MODEL?.trim() || "gpt-image-2";
     if (!apiKey || !baseURL) return null;
     return { apiKey, baseURL, model };

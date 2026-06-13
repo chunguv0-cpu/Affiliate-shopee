@@ -15,6 +15,12 @@ function readInt(name: string, fallback: number): number {
   return Number.isFinite(n) ? Math.max(0, n) : fallback;
 }
 
+/** Đọc giá trị int ưu tiên tên mới (IMAGE_API_*), fallback tên cũ (V98_MAX_IMAGE_*). */
+function readIntPref(primary: string, fallbackName: string, fallback: number): number {
+  if (process.env[primary]?.trim()) return readInt(primary, fallback);
+  return readInt(fallbackName, fallback);
+}
+
 export type CostLimits = {
   perPost: number;
   perCampaignPerDay: number;
@@ -22,10 +28,11 @@ export type CostLimits = {
 };
 
 export function readCostLimits(): CostLimits {
+  // Ưu tiên tên IMAGE_API_* (Master Rebuild), fallback V98_MAX_IMAGE_* (cũ).
   return {
-    perPost: readInt("V98_MAX_IMAGE_CALLS_PER_POST", 2),
-    perCampaignPerDay: readInt("V98_MAX_IMAGE_CALLS_PER_CAMPAIGN_PER_DAY", 20),
-    globalPerDay: readInt("V98_MAX_IMAGE_CALLS_GLOBAL_PER_DAY", 80),
+    perPost: readIntPref("IMAGE_API_MAX_CALLS_PER_POST", "V98_MAX_IMAGE_CALLS_PER_POST", 1),
+    perCampaignPerDay: readIntPref("IMAGE_API_MAX_CALLS_PER_CAMPAIGN_PER_DAY", "V98_MAX_IMAGE_CALLS_PER_CAMPAIGN_PER_DAY", 20),
+    globalPerDay: readIntPref("IMAGE_API_MAX_CALLS_GLOBAL_PER_DAY", "V98_MAX_IMAGE_CALLS_GLOBAL_PER_DAY", 100),
   };
 }
 

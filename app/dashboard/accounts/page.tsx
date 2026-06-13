@@ -12,6 +12,8 @@ export const dynamic = "force-dynamic";
 const TABS = [
   { key: "shopee", label: "Tài khoản Shopee" },
   { key: "facebook", label: "Facebook Pages" },
+  { key: "v98-prompt", label: "V98 Prompt Key" },
+  { key: "v98-image", label: "V98 Image Key" },
   { key: "diagnostics", label: "Kiểm tra API" },
   { key: "logs", label: "Nhật ký kết nối" },
 ];
@@ -47,6 +49,8 @@ export default async function AccountsPage({
 
       {active === "shopee" ? <ShopeeTab /> : null}
       {active === "facebook" ? <FacebookTab /> : null}
+      {active === "v98-prompt" ? <V98KeyTab kind="prompt" /> : null}
+      {active === "v98-image" ? <V98KeyTab kind="image" /> : null}
       {active === "diagnostics" ? <DiagnosticsTab /> : null}
       {active === "logs" ? <ConnectionLogsTab /> : null}
     </div>
@@ -81,6 +85,44 @@ async function FacebookTab() {
         </div>
       ) : null}
       <FacebookPageManager pages={pages} />
+    </div>
+  );
+}
+
+function V98KeyTab({ kind }: { kind: "prompt" | "image" }) {
+  const isPrompt = kind === "prompt";
+  const key = isPrompt
+    ? process.env.V98_PROMPT_API_KEY?.trim() || process.env.V98_API_KEY?.trim()
+    : process.env.V98_IMAGE_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
+  const base = isPrompt
+    ? process.env.V98_PROMPT_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim()
+    : process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
+  const model = isPrompt
+    ? process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || "(chưa đặt)"
+    : process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
+  const usingFallback = isPrompt
+    ? !process.env.V98_PROMPT_API_KEY?.trim() && !!process.env.V98_API_KEY?.trim()
+    : !process.env.V98_IMAGE_API_KEY?.trim() && !!process.env.V98_API_KEY?.trim();
+  const Row = ({ label, ok }: { label: string; ok: boolean }) => (
+    <li>
+      {ok ? "✅" : "❌"} {label}: <strong className={ok ? "text-emerald-700" : "text-red-600"}>{ok ? "đã cấu hình" : "chưa cấu hình"}</strong>
+    </li>
+  );
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-5 text-sm">
+      <h3 className="mb-1 text-base font-semibold text-gray-900">{isPrompt ? "V98 Prompt Key (text/caption/phân tích)" : "V98 Image Key (sinh ảnh HERO)"}</h3>
+      <p className="mb-3 text-xs text-gray-500">
+        Key chỉ lưu phía server, KHÔNG hiển thị tại đây. {isPrompt ? "Chỉ dùng cho text — không dùng sinh ảnh." : "Chỉ dùng sinh 1 ảnh HERO/bài — không dùng cho text."}
+      </p>
+      <ul className="space-y-1.5 text-gray-700">
+        <Row label="API key" ok={!!key} />
+        <Row label="Base URL" ok={!!base} />
+        <li>🧠 Model: <strong>{model}</strong></li>
+        {usingFallback ? <li className="text-amber-600">⚠️ Đang dùng key chung (V98_API_KEY) làm fallback — nên tách riêng key này.</li> : null}
+      </ul>
+      <p className="mt-3 text-xs text-gray-400">
+        Đặt {isPrompt ? "V98_PROMPT_API_KEY / V98_PROMPT_BASE_URL / V98_PROMPT_MODEL" : "V98_IMAGE_API_KEY / V98_IMAGE_BASE_URL / V98_IMAGE_MODEL"} trong env (Vercel) rồi deploy lại.
+      </p>
     </div>
   );
 }

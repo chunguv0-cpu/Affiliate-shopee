@@ -499,12 +499,14 @@ export function resolveProviderConfig(provider: "v98" | "openai"): {
   model: string;
 } {
   if (provider === "v98") {
-    const apiKey = process.env.V98_API_KEY?.trim();
-    const baseURL = process.env.V98_BASE_URL?.trim();
-    const model = process.env.V98_MODEL?.trim();
-    if (!apiKey) throw new Error("Thiếu V98_API_KEY. Vui lòng cấu hình trong .env.local.");
-    if (!baseURL) throw new Error("Thiếu V98_BASE_URL. Vui lòng cấu hình trong .env.local.");
-    if (!model) throw new Error("Thiếu V98_MODEL. Vui lòng cấu hình trong .env.local.");
+    // 2 KEY tách biệt: text/prompt dùng V98_PROMPT_* (fallback V98_* cũ).
+    // KHÔNG bao giờ dùng key ảnh (V98_IMAGE_*) cho text.
+    const apiKey = process.env.V98_PROMPT_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
+    const baseURL = process.env.V98_PROMPT_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
+    const model = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim();
+    if (!apiKey) throw new Error("Thiếu V98_PROMPT_API_KEY (hoặc V98_API_KEY). Cấu hình trong .env.local.");
+    if (!baseURL) throw new Error("Thiếu V98_PROMPT_BASE_URL (hoặc V98_BASE_URL). Cấu hình trong .env.local.");
+    if (!model) throw new Error("Thiếu V98_PROMPT_MODEL (hoặc V98_MODEL). Cấu hình trong .env.local.");
     return { apiKey, baseURL, model };
   }
   const apiKey = process.env.OPENAI_API_KEY?.trim();
