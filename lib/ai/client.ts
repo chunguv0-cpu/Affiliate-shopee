@@ -167,24 +167,12 @@ async function generateViaOpenAICompatible(
   return safeParseAIJson(raw);
 }
 
-/** Provider V98 (endpoint tương thích OpenAI). */
+/** Provider V98 (endpoint tương thích OpenAI). Dùng PROMPT key (qua resolveProviderConfig). */
 async function generateViaV98(
   product: ProductInput,
 ): Promise<GeneratedCaptionResult> {
-  const apiKey = process.env.V98_API_KEY?.trim();
-  const baseURL = process.env.V98_BASE_URL?.trim();
-  const model = process.env.V98_MODEL?.trim();
-
-  if (!apiKey) {
-    throw new Error("Thiếu V98_API_KEY. Vui lòng cấu hình trong .env.local.");
-  }
-  if (!baseURL) {
-    throw new Error("Thiếu V98_BASE_URL. Vui lòng cấu hình trong .env.local.");
-  }
-  if (!model) {
-    throw new Error("Thiếu V98_MODEL. Vui lòng cấu hình trong .env.local.");
-  }
-
+  // Dùng chung resolver -> ưu tiên V98_PROMPT_* (fallback V98_*). KHÔNG dùng key ảnh.
+  const { apiKey, baseURL, model } = resolveProviderConfig("v98");
   return generateViaOpenAICompatible(product, { apiKey, baseURL, model });
 }
 

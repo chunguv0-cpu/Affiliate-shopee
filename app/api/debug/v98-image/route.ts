@@ -16,12 +16,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
   }
-  const apiKey = process.env.V98_API_KEY?.trim();
-  const baseURL = process.env.V98_BASE_URL?.trim();
-  const configuredModel = process.env.V98_IMAGE_MODEL?.trim() || "gpt-image-2";
+  // Debug ảnh -> ưu tiên V98 Image Key (fallback key chung).
+  const apiKey = process.env.V98_IMAGE_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
+  const baseURL = process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
+  const configuredModel = process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
   const model = new URL(request.url).searchParams.get("model")?.trim() || configuredModel;
   if (!apiKey || !baseURL) {
-    return NextResponse.json({ ok: false, error: "Thiếu V98_API_KEY / V98_BASE_URL." }, { status: 500 });
+    return NextResponse.json({ ok: false, error: "Thiếu V98_IMAGE_API_KEY/BASE_URL (hoặc V98_API_KEY/BASE_URL)." }, { status: 500 });
   }
   const prompt = new URL(request.url).searchParams.get("prompt") || "a simple red apple on a white table, product photo";
 
