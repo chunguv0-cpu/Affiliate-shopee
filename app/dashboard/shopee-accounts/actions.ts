@@ -177,13 +177,33 @@ export async function scanAndImportShopeeProducts(
         price_note: "giá có thể thay đổi theo thời điểm",
         status: "ACTIVE",
         shopee_account_id: accountId,
+        // HOTFIX — lưu id/link gốc để kiểm chứng; chưa xác minh tồn tại -> UNKNOWN/UNVERIFIED.
+        // Quét CHỈ lấy sản phẩm + link + ảnh gốc Shopee; KHÔNG gọi API tạo ảnh AI.
+        shop_id: o.shopId ?? null,
+        item_id: o.itemId ?? null,
+        resolved_url: o.productLink ?? null,
+        product_status: "UNKNOWN",
+        validation_status: "UNVERIFIED",
       });
       if (sample.length < 5) sample.push(name);
     }
 
     let created = 0;
     if (rows.length > 0) {
-      const { error } = await supabase.from("products").insert(rows);
+      let { error } = await supabase.from("products").insert(rows);
+      if (error) {
+        // Fallback: nếu migration cột mới (shop_id/product_status...) CHƯA chạy -> bỏ cột mới rồi thử lại.
+        const reduced = rows.map((r) => {
+          const copy = { ...(r as Record<string, unknown>) };
+          delete copy.shop_id;
+          delete copy.item_id;
+          delete copy.resolved_url;
+          delete copy.product_status;
+          delete copy.validation_status;
+          return copy;
+        });
+        ({ error } = await supabase.from("products").insert(reduced));
+      }
       if (error) return { ok: false, error: `Lưu sản phẩm thất bại: ${error.message}` };
       created = rows.length;
     }

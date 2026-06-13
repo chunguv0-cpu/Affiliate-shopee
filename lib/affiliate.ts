@@ -1,4 +1,4 @@
-import type { LinkStatus } from "@/lib/types";
+import { DEAD_PRODUCT_STATUSES, type LinkStatus, type ProductLifeStatus } from "@/lib/types";
 
 /**
  * Helper quản lý link affiliate (Phase 11) — thuần, dùng được cả client & server.
@@ -43,6 +43,31 @@ export function deriveLinkStatus(affiliateLink: string | null | undefined): Link
   if (!/^https?:\/\//i.test(link)) return "INVALID";
   if (isShopeeAffiliateLink(link)) return "READY";
   return "INVALID";
+}
+
+/**
+ * HOTFIX — sản phẩm có bị coi là "chết" không (DELETED/NOT_FOUND/...).
+ * product_status null/UNKNOWN/ACTIVE => KHÔNG chết (giữ tương thích sản phẩm cũ chưa kiểm chứng).
+ */
+export function isProductDead(productStatus: ProductLifeStatus | string | null | undefined): boolean {
+  if (!productStatus) return false;
+  return (DEAD_PRODUCT_STATUSES as string[]).includes(String(productStatus));
+}
+
+/**
+ * HOTFIX — chỉ "Sẵn sàng" khi: link_status=READY + có affiliate_link + sản phẩm không chết.
+ * Dùng chung cho UI (badge/nút) và server (gate tạo bài AI).
+ */
+export function isProductReady(input: {
+  link_status?: LinkStatus | string | null;
+  affiliate_link?: string | null;
+  product_status?: ProductLifeStatus | string | null;
+}): boolean {
+  return (
+    input.link_status === "READY" &&
+    !!(input.affiliate_link && input.affiliate_link.trim()) &&
+    !isProductDead(input.product_status)
+  );
 }
 
 /** Chuyển tên sản phẩm thành slug (bỏ dấu tiếng Việt). */

@@ -5,6 +5,7 @@ import PageHeader from "@/components/dashboard/PageHeader";
 import ShopeeAccountManager from "@/components/dashboard/ShopeeAccountManager";
 import { getFacebookPages } from "@/app/dashboard/accounts/facebook-actions";
 import { getShopeeAccounts } from "@/app/dashboard/shopee-accounts/actions";
+import { readImageUsageSummary } from "@/lib/cost/api-usage-log";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -89,8 +90,9 @@ async function FacebookTab() {
   );
 }
 
-function V98KeyTab({ kind }: { kind: "prompt" | "image" }) {
+async function V98KeyTab({ kind }: { kind: "prompt" | "image" }) {
   const isPrompt = kind === "prompt";
+  const usage = isPrompt ? null : await readImageUsageSummary();
   const key = isPrompt
     ? process.env.V98_PROMPT_API_KEY?.trim() || process.env.V98_API_KEY?.trim()
     : process.env.V98_IMAGE_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
@@ -120,6 +122,36 @@ function V98KeyTab({ kind }: { kind: "prompt" | "image" }) {
         <li>🧠 Model: <strong>{model}</strong></li>
         {usingFallback ? <li className="text-amber-600">⚠️ Đang dùng key chung (V98_API_KEY) làm fallback — nên tách riêng key này.</li> : null}
       </ul>
+      {!isPrompt && usage ? (
+        <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50 p-3 text-xs text-gray-600">
+          <p className="mb-1 font-semibold text-gray-700">Usage API ảnh hôm nay</p>
+          {usage.available ? (
+            <ul className="space-y-1">
+              <li>🖼️ Số lần gọi tạo ảnh (thành công): <strong>{usage.todayCount}</strong></li>
+              <li>🚫 Số lần bị chặn ngoài creative worker: <strong>{usage.todayBlocked}</strong></li>
+              <li>
+                ⏱️ Lần gọi gần nhất:{" "}
+                {usage.lastCall ? (
+                  <span>
+                    <code>{usage.lastCall.endpoint ?? "—"}</code> · context{" "}
+                    <code>{usage.lastCall.context ? JSON.stringify(usage.lastCall.context).slice(0, 120) : "—"}</code>
+                  </span>
+                ) : (
+                  "chưa có"
+                )}
+              </li>
+              {usage.lastBlocked ? (
+                <li className="text-amber-600">
+                  ⚠️ Lần bị chặn gần nhất: context{" "}
+                  <code>{usage.lastBlocked.context ? JSON.stringify(usage.lastBlocked.context).slice(0, 120) : "—"}</code>
+                </li>
+              ) : null}
+            </ul>
+          ) : (
+            <p className="text-gray-400">Chưa có bảng <code>api_usage_logs</code> hoặc chưa có lượt gọi. Chạy migration <code>add_product_link_validation_and_usage_log.sql</code>.</p>
+          )}
+        </div>
+      ) : null}
       <p className="mt-3 text-xs text-gray-400">
         Đặt {isPrompt ? "V98_PROMPT_API_KEY / V98_PROMPT_BASE_URL / V98_PROMPT_MODEL" : "V98_IMAGE_API_KEY / V98_IMAGE_BASE_URL / V98_IMAGE_MODEL"} trong env (Vercel) rồi deploy lại.
       </p>

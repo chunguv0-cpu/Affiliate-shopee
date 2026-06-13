@@ -128,9 +128,9 @@ export default function ShopeeAccountManager({ accounts }: { accounts: ShopeeAcc
             </div>
             <div className="sm:col-span-4">
               <button type="submit" disabled={pending} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
-                {pending ? "Đang quét..." : "Quét & nhập (tự tạo link + ảnh)"}
+                {pending ? "Đang quét..." : "Quét & nhập sản phẩm + ảnh gốc Shopee"}
               </button>
-              <span className="ml-2 text-xs text-gray-400">API trả về link affiliate của chính tài khoản + ảnh thật → tạo sản phẩm READY.</span>
+              <span className="ml-2 text-xs text-gray-400">Bước này chỉ lấy ảnh nguồn từ Shopee, không tạo ảnh AI (không tốn V98 Image Key).</span>
             </div>
           </form>
         )}

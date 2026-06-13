@@ -5,9 +5,14 @@ import { revalidatePath } from "next/cache";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { deriveLinkStatus, generateSubId } from "@/lib/affiliate";
 import {
+  buildProductValidationPatch,
+  validateShopeeProductExists,
+} from "@/lib/shopee/validate-product-link";
+import {
   PRODUCT_STATUSES,
   type LinkStatus,
   type Product,
+  type ProductLifeStatus,
   type ProductStatus,
 } from "@/lib/types";
 
@@ -257,6 +262,119 @@ export async function saveAffiliateLink(
   } catch (err) {
     const message = err instanceof Error ? err.message : "Lỗi không xác định.";
     return { ok: false, error: `Lưu link thất bại: ${message}` };
+  }
+}
+
+// ===========================================================================
+// HOTFIX — Kiểm chứng link sản phẩm (sản phẩm chết -> không Sẵn sàng).
+// ===========================================================================
+
+export type RevalidateOneResult =
+  | { ok: true; product_status: ProductLifeStatus; exists: boolean; message: string }
+  | { ok: false; error: string };
+
+const REVALIDATE_BATCH_SIZE = (() => {
+  const raw = process.env.REVALIDATE_LINKS_BATCH_SIZE?.trim();
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) ? Math.min(50, Math.max(1, n)) : 20;
+})();
+
+/** Kiểm tra lại 1 link sản phẩm và cập nhật product_status/validation_*. KHÔNG xóa dữ liệu. */
+export async function revalidateProductLink(productId: string): Promise<RevalidateOneResult> {
+  if (!productId || typeof productId !== "string") return { ok: false, error: "Thiếu mã sản phẩm." };
+  try {
+    const supabase = createSupabaseAdminClient();
+    const { data, error } = await supabase
+      .from("products")
+      .select("*")
+      .eq("id", productId)
+      .single();
+    if (error || !data) return { ok: false, error: "Không tìm thấy sản phẩm." };
+    const p = data as Pick<Product, "id" | "product_name" | "affiliate_link" | "original_url" | "resolved_url" | "shop_id" | "item_id">;
+
+    const result = await validateShopeeProductExists({
+      affiliate_link: p.affiliate_link,
+      original_url: p.original_url,
+      resolved_url: p.resolved_url ?? null,
+      shop_id: p.shop_id ?? null,
+      item_id: p.item_id ?? null,
+      product_name: p.product_name,
+    });
+    const { error: upErr } = await supabase.from("products").update(buildProductValidationPatch(result)).eq("id", p.id);
+    if (upErr) return { ok: false, error: `Lưu kết quả kiểm chứng thất bại: ${upErr.message}` };
+
+    revalidatePath(PRODUCTS_PATH);
+    revalidatePath(LINKS_PATH);
+    const message =
+      result.product_status === "ACTIVE"
+        ? "Sản phẩm còn tồn tại."
+        : result.product_status === "UNKNOWN"
+          ? `Chưa xác định (${result.error ?? "có thể bị chặn bot"}).`
+          : `Sản phẩm không tồn tại (${result.product_status}).`;
+    return { ok: true, product_status: result.product_status, exists: result.exists, message };
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Kiểm chứng thất bại: ${m}` };
+  }
+}
+
+export type RevalidateAllResult =
+  | { ok: true; checked: number; active: number; dead: number; unknown: number }
+  | { ok: false; error: string };
+
+/**
+ * Kiểm tra lại nhiều link cũ theo batch nhỏ (REVALIDATE_LINKS_BATCH_SIZE).
+ * Ưu tiên sản phẩm chưa kiểm chứng / kiểm chứng lâu nhất. KHÔNG xóa dữ liệu.
+ */
+export async function revalidateAllProductLinks(): Promise<RevalidateAllResult> {
+  try {
+    if (process.env.PRODUCT_LINK_VALIDATION_ENABLED?.trim().toLowerCase() === "false") {
+      return { ok: false, error: "Kiểm chứng link đang tắt (PRODUCT_LINK_VALIDATION_ENABLED=false)." };
+    }
+    const supabase = createSupabaseAdminClient();
+    // Lấy batch: ưu tiên last_validated_at NULL trước (chưa kiểm chứng), rồi cũ nhất.
+    // select("*") + fallback order created_at để KHÔNG vỡ nếu migration cột mới chưa chạy.
+    let q = await supabase
+      .from("products")
+      .select("*")
+      .not("affiliate_link", "is", null)
+      .order("last_validated_at", { ascending: true, nullsFirst: true })
+      .limit(REVALIDATE_BATCH_SIZE);
+    if (q.error) {
+      q = await supabase
+        .from("products")
+        .select("*")
+        .not("affiliate_link", "is", null)
+        .order("created_at", { ascending: true })
+        .limit(REVALIDATE_BATCH_SIZE);
+    }
+    if (q.error) return { ok: false, error: `Không tải được danh sách: ${q.error.message}` };
+    const rows = (q.data ?? []) as Array<Pick<Product, "id" | "product_name" | "affiliate_link" | "original_url" | "resolved_url" | "shop_id" | "item_id">>;
+
+    let active = 0;
+    let dead = 0;
+    let unknown = 0;
+    for (const p of rows) {
+      const result = await validateShopeeProductExists({
+        affiliate_link: p.affiliate_link,
+        original_url: p.original_url,
+        resolved_url: p.resolved_url ?? null,
+        shop_id: p.shop_id ?? null,
+        item_id: p.item_id ?? null,
+        product_name: p.product_name,
+      });
+      await supabase.from("products").update(buildProductValidationPatch(result)).eq("id", p.id);
+      if (result.product_status === "ACTIVE") active += 1;
+      else if (result.product_status === "UNKNOWN") unknown += 1;
+      else dead += 1;
+    }
+
+    revalidatePath(PRODUCTS_PATH);
+    revalidatePath(LINKS_PATH);
+    return { ok: true, checked: rows.length, active, dead, unknown };
+  } catch (err) {
+    const m = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { ok: false, error: `Kiểm chứng hàng loạt thất bại: ${m}` };
   }
 }
 

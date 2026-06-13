@@ -7,14 +7,20 @@ import { createAiPostImageJob } from "@/app/dashboard/jobs/actions";
 
 export default function GeneratePostButton({
   productId,
+  disabled = false,
+  disabledReason,
 }: {
   productId: string;
+  /** HOTFIX — chặn tạo bài AI cho sản phẩm chết. */
+  disabled?: boolean;
+  disabledReason?: string;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   function handleClick() {
+    if (disabled) return;
     setError(null);
     startTransition(async () => {
       const result = await createAiPostImageJob(productId);
@@ -32,12 +38,16 @@ export default function GeneratePostButton({
       <button
         type="button"
         onClick={handleClick}
-        disabled={pending}
-        className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+        disabled={pending || disabled}
+        title={disabled ? disabledReason : undefined}
+        className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {pending ? "Đã tạo job, AI đang xử lý..." : "🤖 Tạo bài đăng AI"}
       </button>
 
+      {disabled && disabledReason ? (
+        <span className="max-w-[200px] text-right text-xs text-amber-600">{disabledReason}</span>
+      ) : null}
       {error ? (
         <span className="max-w-[200px] text-right text-xs text-red-600">{error}</span>
       ) : null}

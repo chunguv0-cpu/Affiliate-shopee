@@ -22,6 +22,47 @@ export type ShopeeAccount = {
 /** Trạng thái link affiliate (Phase 11). */
 export type LinkStatus = "NEED_CONVERT" | "READY" | "INVALID";
 
+/**
+ * HOTFIX — trạng thái "sống/chết" của sản phẩm Shopee (tách khỏi link_status).
+ * link_status = link có hợp lệ không; product_status = sản phẩm còn tồn tại không.
+ * Chỉ coi là "Sẵn sàng" khi link_status=READY VÀ product_status không thuộc nhóm chết.
+ */
+export type ProductLifeStatus =
+  | "ACTIVE"
+  | "DELETED"
+  | "NOT_FOUND"
+  | "UNAVAILABLE"
+  | "REGION_BLOCKED"
+  | "INVALID_URL"
+  | "UNKNOWN";
+
+/** Trạng thái kiểm chứng link sản phẩm. */
+export type ProductValidationStatus =
+  | "VALID"
+  | "DEAD"
+  | "UNVERIFIED"
+  | "VALIDATION_FAILED"
+  | "MISSING_IMAGE";
+
+/** Các product_status coi là "sản phẩm chết" -> không được tạo bài AI. */
+export const DEAD_PRODUCT_STATUSES: ProductLifeStatus[] = [
+  "DELETED",
+  "NOT_FOUND",
+  "UNAVAILABLE",
+  "REGION_BLOCKED",
+  "INVALID_URL",
+];
+
+export const PRODUCT_LIFE_STATUS_LABELS: Record<ProductLifeStatus, string> = {
+  ACTIVE: "Còn hàng",
+  DELETED: "Đã gỡ",
+  NOT_FOUND: "Không tồn tại",
+  UNAVAILABLE: "Tạm hết / ẩn",
+  REGION_BLOCKED: "Chặn vùng",
+  INVALID_URL: "Link sai",
+  UNKNOWN: "Chưa kiểm chứng",
+};
+
 export type Product = {
   id: string;
   product_name: string;
@@ -42,6 +83,14 @@ export type Product = {
   source_capture_method?: string | null;
   source_capture_note?: string | null;
   source_captured_at?: string | null;
+  // HOTFIX — kiểm chứng sản phẩm còn sống.
+  product_status?: ProductLifeStatus | null;
+  validation_status?: ProductValidationStatus | null;
+  validation_error?: string | null;
+  last_validated_at?: string | null;
+  resolved_url?: string | null;
+  shop_id?: string | null;
+  item_id?: string | null;
   created_at: string;
   updated_at: string;
 };

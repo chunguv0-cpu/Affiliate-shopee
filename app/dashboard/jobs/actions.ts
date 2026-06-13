@@ -2,8 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 
+import { isProductDead } from "@/lib/affiliate";
 import { runAiJobStep, type RunStepResult } from "@/lib/jobs/ai-job-runner";
 import { insertPostingLog } from "@/lib/posts/log";
+import { buildProductValidationPatch, validateShopeeProductExists } from "@/lib/shopee/validate-product-link";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { AiJob, Product } from "@/lib/types";
 
@@ -19,9 +21,10 @@ export async function createAiPostImageJob(productId: string): Promise<CreateJob
   if (!productId || typeof productId !== "string") return { ok: false, error: "Thiếu mã sản phẩm." };
   try {
     const supabase = createSupabaseAdminClient();
+    // select("*") để KHÔNG lỗi nếu migration cột mới (product_status...) chưa chạy.
     const { data: product, error: prodErr } = await supabase
       .from("products")
-      .select("id, product_name, original_url, affiliate_link, target_customer, product_angle, price_note, link_status")
+      .select("*")
       .eq("id", productId)
       .single();
     if (prodErr || !product) return { ok: false, error: "Không tìm thấy sản phẩm." };
@@ -35,9 +38,48 @@ export async function createAiPostImageJob(productId: string): Promise<CreateJob
       | "product_angle"
       | "price_note"
       | "link_status"
+      | "product_status"
+      | "resolved_url"
+      | "shop_id"
+      | "item_id"
     >;
     if (p.link_status !== "READY" || !p.affiliate_link) {
       return { ok: false, error: "Sản phẩm chưa có link Affiliate hợp lệ. Vui lòng chuyển link trước." };
+    }
+
+    // HOTFIX — chặn tạo bài AI cho sản phẩm CHẾT (đã kiểm chứng trước đó).
+    if (isProductDead(p.product_status)) {
+      return {
+        ok: false,
+        error: "Sản phẩm này không còn tồn tại trên Shopee. Hãy bấm 'Kiểm tra lại' hoặc thay link trước khi tạo bài.",
+      };
+    }
+
+    // Kiểm chứng nhanh: CHỈ chặn khi xác nhận chết; mơ hồ (UNKNOWN do bị chặn bot) thì cho qua.
+    const check = await validateShopeeProductExists({
+      affiliate_link: p.affiliate_link,
+      original_url: p.original_url,
+      resolved_url: p.resolved_url ?? null,
+      shop_id: p.shop_id ?? null,
+      item_id: p.item_id ?? null,
+      product_name: p.product_name,
+    });
+    if (check.product_status !== "UNKNOWN") {
+      await supabase.from("products").update(buildProductValidationPatch(check)).eq("id", p.id);
+    }
+    if (!check.exists && isProductDead(check.product_status)) {
+      await insertPostingLog(
+        supabase,
+        null,
+        "PRODUCT_LINK_DEAD_BLOCKED",
+        "FAILED",
+        `Chặn tạo bài: sản phẩm chết (${check.product_status}).`,
+        { product_id: p.id },
+      );
+      return {
+        ok: false,
+        error: `Sản phẩm không tồn tại trên Shopee (${check.product_status}). Không thể tạo bài AI.`,
+      };
     }
 
     const { data: existingJobs } = await supabase

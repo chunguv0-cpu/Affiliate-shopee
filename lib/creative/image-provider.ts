@@ -2,6 +2,8 @@ import "server-only";
 
 import OpenAI from "openai";
 
+import { logImageApiUsage } from "@/lib/cost/api-usage-log";
+
 /**
  * Phase 17 V2 — lớp sinh ảnh creative (pluggable).
  * Provider: mock (mặc định) | openai | none.
@@ -11,6 +13,93 @@ import OpenAI from "openai";
 export type ImageProvider = "mock" | "openai" | "v98" | "grok_gateway" | "none";
 const TEXT_FREE_IMAGE_PROMPT_RULE = "no text, no letters, no words, no watermark, no logo, no UI text";
 const V98_TIMEOUT_ERROR = "V98_IMAGE_TIMEOUT_RETRY_LATER";
+
+// ===========================================================================
+// HOTFIX — Chặn cứng: API ảnh (đặc biệt V98 Image Key) CHỈ được gọi trong
+// creative worker. Quét/import/validate sản phẩm KHÔNG bao giờ được trừ tiền ảnh.
+// Dù sau này có code gọi nhầm generateImageFromPrompt mà thiếu context hợp lệ,
+// provider trả tiền (v98/openai/grok) cũng KHÔNG được gọi.
+// ===========================================================================
+
+export const IMAGE_BLOCKED_ERROR_CODE = "IMAGE_PROVIDER_BLOCKED_OUTSIDE_CREATIVE_WORKER";
+
+/** Ngữ cảnh gọi sinh ảnh — bắt buộc để gọi provider trả tiền. */
+export type ImageGenerationContext = {
+  source: string;            // vd creative_worker | creative_regenerate | creative_manual | autopilot_creative
+  job_type?: string | null;  // vd CREATE_AI_POST_WITH_IMAGES
+  job_step?: string | null;  // vd AI_HERO_IMAGE | IMAGE_1 | IMAGE_2 | IMAGE_3
+};
+
+/** Context BỊ CHẶN tuyệt đối (quét/import/validate sản phẩm...). */
+const BLOCKED_IMAGE_SOURCES = new Set([
+  "product_scan",
+  "shopee_api_test",
+  "import_links",
+  "validate_product",
+  "source_image_fetch",
+  "campaign_sourcing",
+  "affiliate_conversion",
+  "product_creation",
+  "post_creation",
+  "manual_product_scan",
+]);
+
+/** Context ĐƯỢC PHÉP gọi provider trả tiền (sinh ảnh creative). */
+const ALLOWED_IMAGE_SOURCES = new Set([
+  "creative_worker",     // ai-job-runner: AI_HERO_IMAGE / IMAGE_1..3
+  "creative_regenerate", // tạo lại ảnh ở màn Bài đăng
+  "creative_manual",     // tạo bài 1-bước thủ công
+  "autopilot_creative",  // autopilot dựng creative pack
+]);
+
+function readBoolEnvImg(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return fallback;
+}
+
+export type ImageGuardDecision = { allowed: boolean; reason: string | null; code: string | null };
+
+/**
+ * Quyết định có cho phép gọi provider ảnh trả tiền với context này không.
+ * - IMAGE_GENERATION_ENABLED=false  -> chặn tất cả.
+ * - thiếu context / source bị chặn  -> chặn.
+ * - IMAGE_GENERATION_ALLOWED_ONLY_IN_CREATIVE_WORKER=true (mặc định) -> chỉ allow source creative.
+ */
+export function checkImageGenerationContext(ctx?: ImageGenerationContext | null): ImageGuardDecision {
+  if (!readBoolEnvImg("IMAGE_GENERATION_ENABLED", true)) {
+    return { allowed: false, reason: "Sinh ảnh đang tắt (IMAGE_GENERATION_ENABLED=false).", code: "IMAGE_GENERATION_DISABLED" };
+  }
+  const source = ctx?.source?.trim().toLowerCase() ?? "";
+  if (!source) {
+    return { allowed: false, reason: "Thiếu context sinh ảnh — chặn để không trừ tiền API ảnh.", code: IMAGE_BLOCKED_ERROR_CODE };
+  }
+  if (BLOCKED_IMAGE_SOURCES.has(source)) {
+    return { allowed: false, reason: `Context '${source}' không được phép gọi API ảnh.`, code: IMAGE_BLOCKED_ERROR_CODE };
+  }
+  const strict = readBoolEnvImg("IMAGE_GENERATION_ALLOWED_ONLY_IN_CREATIVE_WORKER", true);
+  if (strict && !ALLOWED_IMAGE_SOURCES.has(source)) {
+    return { allowed: false, reason: `Context '${source}' nằm ngoài creative worker — chặn API ảnh.`, code: IMAGE_BLOCKED_ERROR_CODE };
+  }
+  return { allowed: true, reason: null, code: null };
+}
+
+/** Provider có tính tiền hay không (cần guard). mock/none miễn phí. */
+function isPaidImageProvider(provider: ImageProvider): boolean {
+  return provider === "v98" || provider === "openai" || provider === "grok_gateway";
+}
+
+/** key_type cho log (V98 Image Key = image). */
+function usageKeyType(provider: ImageProvider): string {
+  return provider === "v98" || provider === "openai" || provider === "grok_gateway" ? "image" : provider;
+}
+
+/** Tên provider hiển thị trong log usage. */
+function usageProviderName(provider: ImageProvider): string {
+  return provider === "v98" ? "v98_image" : provider;
+}
 
 export type GenerateImageInput = {
   product_name: string;
@@ -178,16 +267,48 @@ function resolveImageConfig(
  * - openai / v98: gọi endpoint tương thích OpenAI (images.generate), trả base64 hoặc URL.
  * - mock: trả URL placeholder, mock=true (KHÔNG production-ready).
  */
-export async function generateImageFromPrompt(prompt: string): Promise<PromptImageResult> {
+export async function generateImageFromPrompt(
+  prompt: string,
+  context?: ImageGenerationContext,
+): Promise<PromptImageResult> {
   let provider = getImageProvider();
+
+  // GUARD — chặn provider trả tiền nếu context không hợp lệ (vd quét/import/validate SP).
+  if (isPaidImageProvider(provider)) {
+    const guard = checkImageGenerationContext(context);
+    if (!guard.allowed) {
+      await logImageApiUsage({
+        provider: usageProviderName(provider),
+        model: null,
+        keyType: usageKeyType(provider),
+        callType: "image_generation_blocked",
+        endpoint: null,
+        context: { ...(context ?? {}), guard_code: guard.code },
+        success: false,
+        errorMessage: guard.reason,
+      });
+      return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED", error: guard.code ?? IMAGE_BLOCKED_ERROR_CODE };
+    }
+  }
 
   // Grok qua cookie (worker ngoài Vercel). Lỗi/hết hạn cookie -> fallback an toàn.
   if (provider === "grok_gateway") {
     const g = await callGrokGateway(prompt);
+    await logImageApiUsage({
+      provider: "grok_gateway",
+      model: g.model,
+      keyType: "image",
+      callType: "image_generation",
+      endpoint: process.env.GROK_GATEWAY_URL?.trim() ?? null,
+      context: context ?? null,
+      success: g.status === "READY",
+      errorMessage: g.error ?? null,
+    });
     if (g.status === "READY") return g;
     const fb = grokGatewayFallback();
     if (fb === "none") return g; // giữ lỗi gốc
     provider = fb; // chạy tiếp với provider fallback (v98/openai/mock) bên dưới
+    // Nếu fallback là provider trả tiền, guard đã pass ở trên (cùng context).
   }
 
   if (provider === "none") {
@@ -206,6 +327,18 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
         : "Thiếu OPENAI_API_KEY.";
     return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED", error };
   }
+  const usageEndpoint = cfg.baseURL ? `${cfg.baseURL.replace(/\/$/, "")}/images/generations` : "openai:images.generate";
+  const logProviderCall = (success: boolean, errorMessage?: string | null) =>
+    logImageApiUsage({
+      provider: usageProviderName(provider),
+      model: cfg.model,
+      keyType: usageKeyType(provider),
+      callType: "image_generation",
+      endpoint: usageEndpoint,
+      context: context ?? null,
+      success,
+      errorMessage: errorMessage ?? null,
+    });
 
   const client = new OpenAI({ apiKey: cfg.apiKey, ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}) });
   const isGptImage = /gpt-image/i.test(cfg.model);
@@ -251,8 +384,14 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
       const res = await callImagesGenerate();
       const b64 = res.data?.[0]?.b64_json ?? null;
       const url = res.data?.[0]?.url ?? null;
-      if (b64) return { b64, url: null, mock: false, provider, model: cfg.model, status: "READY" };
-      if (url) return { b64: null, url, mock: false, provider, model: cfg.model, status: "READY" };
+      if (b64) {
+        await logProviderCall(true);
+        return { b64, url: null, mock: false, provider, model: cfg.model, status: "READY" };
+      }
+      if (url) {
+        await logProviderCall(true);
+        return { b64: null, url, mock: false, provider, model: cfg.model, status: "READY" };
+      }
       lastError = "No image URL or base64 returned from image model.";
       break; // không phải lỗi tạm thời -> dừng
     } catch (err) {
@@ -264,6 +403,7 @@ export async function generateImageFromPrompt(prompt: string): Promise<PromptIma
       break;
     }
   }
+  await logProviderCall(false, lastError);
   return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED", error: lastError };
 }
 

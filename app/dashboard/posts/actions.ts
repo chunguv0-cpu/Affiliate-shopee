@@ -28,11 +28,16 @@ import { insertPostingLog } from "@/lib/posts/log";
 import { publishGeneratedPostById } from "@/lib/posts/publish";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { isDue } from "@/lib/utils/date";
+import { isProductDead } from "@/lib/affiliate";
 import type {
   GeneratedPost,
   GeneratedPostStatus,
   Product,
 } from "@/lib/types";
+
+// HOTFIX — chặn tạo bài AI cho sản phẩm đã kiểm chứng là CHẾT.
+const DEAD_PRODUCT_BLOCK_MSG =
+  "Sản phẩm này không còn tồn tại trên Shopee. Hãy bấm 'Kiểm tra lại' hoặc thay link trước khi tạo bài.";
 
 /** Kết quả của generatePostFromProduct. */
 export type GenerateResult =
@@ -171,6 +176,10 @@ export async function generatePostFromProduct(
         error:
           "Sản phẩm chưa có link Affiliate hợp lệ. Vui lòng chuyển link trước khi tạo bài.",
       };
+    }
+    // HOTFIX — không tạo bài AI cho sản phẩm đã biết là chết (không tốn V98 Image Key).
+    if (isProductDead(product.product_status)) {
+      return { ok: false, error: DEAD_PRODUCT_BLOCK_MSG };
     }
 
     const input: ProductInput = {
@@ -545,6 +554,10 @@ export async function createAiPostWithCreatives(productId: string): Promise<OneS
     const product = productData as Product;
     if (product.link_status !== "READY" || !product.affiliate_link) {
       return { ok: false, error: "Sản phẩm chưa có link Affiliate hợp lệ. Vui lòng chuyển link trước." };
+    }
+    // HOTFIX — không tạo bài AI cho sản phẩm đã biết là chết (không tốn V98 Image Key).
+    if (isProductDead(product.product_status)) {
+      return { ok: false, error: DEAD_PRODUCT_BLOCK_MSG };
     }
 
     const input: ProductInput = {

@@ -8,17 +8,25 @@ import GeneratePostButton from "@/components/dashboard/GeneratePostButton";
 import LinkStatusBadge from "@/components/dashboard/LinkStatusBadge";
 import ProductForm from "@/components/dashboard/ProductForm";
 import ProductStatusBadge from "@/components/dashboard/ProductStatusBadge";
-import { deleteProduct } from "@/app/dashboard/products/actions";
-import { LINK_STATUS_LABELS, type LinkStatus, type Product } from "@/lib/types";
+import { deleteProduct, revalidateAllProductLinks, revalidateProductLink } from "@/app/dashboard/products/actions";
+import { PRODUCT_LIFE_STATUS_LABELS, type Product } from "@/lib/types";
+import { isProductDead, isProductReady } from "@/lib/affiliate";
 import { hasValidProductImage } from "@/lib/shopee/image-url";
 
-type LinkFilter = "ALL" | LinkStatus;
+type LinkFilter = "ALL" | "NEED_CONVERT" | "READY" | "ERROR";
+
+// "Sẵn sàng" = link READY + sản phẩm không chết. "Link lỗi" gộp cả link sai LẪN sản phẩm chết.
+const FILTER_PREDICATE: Record<Exclude<LinkFilter, "ALL">, (p: Product) => boolean> = {
+  NEED_CONVERT: (p) => p.link_status === "NEED_CONVERT",
+  READY: (p) => isProductReady(p),
+  ERROR: (p) => p.link_status === "INVALID" || isProductDead(p.product_status),
+};
 
 const FILTERS: { key: LinkFilter; label: string }[] = [
   { key: "ALL", label: "Tất cả" },
-  { key: "NEED_CONVERT", label: LINK_STATUS_LABELS.NEED_CONVERT },
-  { key: "READY", label: LINK_STATUS_LABELS.READY },
-  { key: "INVALID", label: LINK_STATUS_LABELS.INVALID },
+  { key: "NEED_CONVERT", label: "Cần chuyển link" },
+  { key: "READY", label: "Sẵn sàng" },
+  { key: "ERROR", label: "Link lỗi" },
 ];
 
 function formatDate(iso: string): string {
@@ -40,12 +48,15 @@ export default function ProductTable({
 }) {
   const [editing, setEditing] = useState<Product | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [revalidatingId, setRevalidatingId] = useState<string | null>(null);
+  const [revalidatingAll, setRevalidatingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState<LinkFilter>("ALL");
   const [pending, startTransition] = useTransition();
 
   const filtered = useMemo(
-    () => (filter === "ALL" ? products : products.filter((p) => p.link_status === filter)),
+    () => (filter === "ALL" ? products : products.filter((p) => FILTER_PREDICATE[filter](p))),
     [products, filter],
   );
 
@@ -63,31 +74,70 @@ export default function ProductTable({
     });
   }
 
+  function handleRevalidate(product: Product) {
+    setError(null);
+    setNotice(null);
+    setRevalidatingId(product.id);
+    startTransition(async () => {
+      const result = await revalidateProductLink(product.id);
+      setRevalidatingId(null);
+      if (result.ok) setNotice(`"${product.product_name}": ${result.message}`);
+      else setError(result.error);
+    });
+  }
+
+  function handleRevalidateAll() {
+    setError(null);
+    setNotice(null);
+    setRevalidatingAll(true);
+    startTransition(async () => {
+      const result = await revalidateAllProductLinks();
+      setRevalidatingAll(false);
+      if (result.ok) {
+        setNotice(`Đã kiểm tra ${result.checked} link: ${result.active} còn sống, ${result.dead} chết, ${result.unknown} chưa rõ.`);
+      } else setError(result.error);
+    });
+  }
+
   return (
     <>
-      {/* Filter theo trạng thái link */}
-      <div className="mb-3 flex flex-wrap gap-2">
-        {FILTERS.map((f) => {
-          const active = filter === f.key;
-          const count =
-            f.key === "ALL"
-              ? products.length
-              : products.filter((p) => p.link_status === f.key).length;
-          return (
-            <button
-              key={f.key}
-              type="button"
-              onClick={() => setFilter(f.key)}
-              className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
-                active ? "bg-blue-600 text-white" : "border border-gray-300 text-gray-700 hover:bg-gray-50"
-              }`}
-            >
-              {f.label} <span className={active ? "text-blue-100" : "text-gray-400"}>({count})</span>
-            </button>
-          );
-        })}
+      {/* Filter theo trạng thái link + nút kiểm tra lại toàn bộ */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2">
+          {FILTERS.map((f) => {
+            const active = filter === f.key;
+            const count =
+              f.key === "ALL" ? products.length : products.filter((p) => FILTER_PREDICATE[f.key as Exclude<LinkFilter, "ALL">](p)).length;
+            return (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => setFilter(f.key)}
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
+                  active ? "bg-blue-600 text-white" : "border border-gray-300 text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                {f.label} <span className={active ? "text-blue-100" : "text-gray-400"}>({count})</span>
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={handleRevalidateAll}
+          disabled={revalidatingAll || pending}
+          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+          title="Kiểm tra lại theo batch nhỏ: link sống → Sẵn sàng, link chết → chuyển sang Link lỗi."
+        >
+          {revalidatingAll ? "Đang kiểm tra..." : "🔁 Kiểm tra lại toàn bộ link"}
+        </button>
       </div>
 
+      {notice ? (
+        <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+          {notice}
+        </div>
+      ) : null}
       {error ? (
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
@@ -148,7 +198,22 @@ export default function ProductTable({
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-600">{p.sub_id ?? "—"}</td>
                   <td className="px-4 py-3">
-                    <LinkStatusBadge status={p.link_status} />
+                    <div className="flex flex-col items-start gap-1">
+                      <LinkStatusBadge status={p.link_status} />
+                      {isProductDead(p.product_status) ? (
+                        <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700">
+                          ⚠️ Sản phẩm không tồn tại
+                        </span>
+                      ) : p.product_status === "ACTIVE" && isProductReady(p) ? (
+                        <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
+                          ✓ Sẵn sàng
+                        </span>
+                      ) : p.product_status && p.product_status !== "ACTIVE" ? (
+                        <span className="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500">
+                          {PRODUCT_LIFE_STATUS_LABELS[p.product_status] ?? "Chưa kiểm chứng"}
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <ProductStatusBadge status={p.status} />
@@ -183,7 +248,36 @@ export default function ProductTable({
                         appUrl={appUrl}
                         captured={hasValidProductImage(p.source_product_images, p.image_url)}
                       />
-                      <GeneratePostButton productId={p.id} />
+                      <button
+                        type="button"
+                        onClick={() => handleRevalidate(p)}
+                        disabled={pending && revalidatingId === p.id}
+                        className="rounded-md border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                        title="Kiểm tra lại sản phẩm còn tồn tại trên Shopee không."
+                      >
+                        {pending && revalidatingId === p.id ? "Đang kiểm tra..." : "🔍 Kiểm tra lại"}
+                      </button>
+                      <GeneratePostButton
+                        productId={p.id}
+                        disabled={isProductDead(p.product_status) || !isProductReady(p)}
+                        disabledReason={
+                          isProductDead(p.product_status)
+                            ? "Sản phẩm không tồn tại — không thể tạo bài."
+                            : !isProductReady(p)
+                              ? "Cần link affiliate hợp lệ trước khi tạo bài."
+                              : undefined
+                        }
+                      />
+                      {isProductDead(p.product_status) && p.affiliate_link ? (
+                        <button
+                          type="button"
+                          onClick={() => setEditing(p)}
+                          className="rounded-md border border-amber-300 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50"
+                          title="Sửa link / tìm sản phẩm thay thế."
+                        >
+                          ✏️ Sửa link
+                        </button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>

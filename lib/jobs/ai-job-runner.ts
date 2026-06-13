@@ -794,6 +794,12 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       const pWithOverlay = { ...p, caption_overlay: overlays[idx - 1] ?? p.caption_overlay ?? "" };
       const res = await generateAndStoreImageAsset(supabase, postId, sortOrder, pWithOverlay, {
         campaignRunId: job.ai_campaign_run_id ?? null,
+        // Context creative worker — chỉ ở đây V98 Image Key mới được phép bị trừ tiền.
+        context: {
+          source: "creative_worker",
+          job_type: JOB_TYPE,
+          job_step: idx === 1 ? "AI_HERO_IMAGE" : step,
+        },
       });
       if (!res.ok && res.blockedByBudget) {
         // Hết quota V98 hôm nay -> tạm hoãn (KHÔNG tính attempts), chờ reset.

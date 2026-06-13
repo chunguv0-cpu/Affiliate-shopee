@@ -12,6 +12,7 @@ import {
   generateImageFromPrompt,
   getImageProvider,
   getImageProviderConfig,
+  type ImageGenerationContext,
   type PromptImageResult,
 } from "@/lib/creative/image-provider";
 import { canSpendV98 } from "@/lib/cost/cost-guardrails";
@@ -597,7 +598,14 @@ export async function materializeImages(
   supabase: SupabaseClient,
   postId: string,
   promptsIn: MinimalPrompt[],
+  options: { context?: ImageGenerationContext } = {},
 ): Promise<GeneratePackResult> {
+  // Context creative (mặc định creative_worker) để qua được guard chống trừ tiền ngoài creative.
+  const imageContext: ImageGenerationContext = options.context ?? {
+    source: "creative_worker",
+    job_type: "CREATE_AI_POST_WITH_IMAGES",
+    job_step: "MATERIALIZE_IMAGES",
+  };
   const provider = getImageProvider();
   const prompts = promptsIn.slice(0, MIN_ASSETS);
   const errorMessages: string[] = [];
@@ -639,7 +647,7 @@ export async function materializeImages(
   // Per-image timeout 30s, song song; backstop tổng 75s.
   const genOne = (pr: string): Promise<PromptImageResult> =>
     Promise.race([
-      generateImageFromPrompt(withTextFreePromptRule(pr)),
+      generateImageFromPrompt(withTextFreePromptRule(pr), imageContext),
       new Promise<PromptImageResult>((res) =>
         setTimeout(() => res(failResult(provider, "Image generation timed out (30s).")), PER_IMAGE_TIMEOUT_MS),
       ),
@@ -882,8 +890,14 @@ export async function generateAndStoreImageAsset(
   postId: string,
   sortOrder: number,
   prompt: MinimalPrompt,
-  options: { force?: boolean; campaignRunId?: string | null } = {},
+  options: { force?: boolean; campaignRunId?: string | null; context?: ImageGenerationContext } = {},
 ): Promise<{ ok: boolean; mock: boolean; image_url: string | null; error: string | null; blockedByBudget?: boolean }> {
+  // Context creative (mặc định creative_worker) — guard chống trừ tiền ngoài creative worker.
+  const imageContext: ImageGenerationContext = options.context ?? {
+    source: "creative_worker",
+    job_type: "CREATE_AI_POST_WITH_IMAGES",
+    job_step: `AI_IMAGE_${sortOrder}`,
+  };
   // Keep AI images text-free, then render every Vietnamese overlay locally for legibility.
   const overlay = normalizeOverlayText(prompt.caption_overlay, 42);
   const cleanPrompt = withTextFreePromptRule(prompt.prompt);
@@ -928,7 +942,7 @@ export async function generateAndStoreImageAsset(
     slot_index: sortOrder,
     prompt_hash: promptHash,
   });
-  const r = await generateImageFromPrompt(cleanPrompt);
+  const r = await generateImageFromPrompt(cleanPrompt, imageContext);
   if (r.status !== "READY") {
     await insertPostingLog(supabase, postId, V98_CALL_FAILED, "FAILED", r.error ?? `Image provider failed for slot ${sortOrder}.`, {
       generated_post_id: postId,
