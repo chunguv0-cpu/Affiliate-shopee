@@ -64,24 +64,35 @@ export type ImageGuardDecision = { allowed: boolean; reason: string | null; code
 
 /**
  * Quyết định có cho phép gọi provider ảnh trả tiền với context này không.
- * - IMAGE_GENERATION_ENABLED=false  -> chặn tất cả.
- * - thiếu context / source bị chặn  -> chặn.
- * - IMAGE_GENERATION_ALLOWED_ONLY_IN_CREATIVE_WORKER=true (mặc định) -> chỉ allow source creative.
+ *
+ * THIẾT KẾ AN TOÀN (denylist-only, KHÔNG chặn nhầm):
+ * - CHỈ chặn các source nguy hiểm rõ ràng (quét/import/validate sản phẩm...).
+ * - Mọi context khác (kể cả creative_worker, regenerate, hoặc thiếu context) -> CHO PHÉP.
+ *   => sinh ảnh hợp lệ KHÔNG BAO GIỜ bị guard chặn nhầm (không còn IMAGE_GENERATION_DISABLED).
+ * - Muốn siết chặt (chỉ cho creative): bật IMAGE_GENERATION_ALLOWED_ONLY_IN_CREATIVE_WORKER=true (mặc định TẮT).
+ *
+ * KHÔNG còn kill-switch toàn cục IMAGE_GENERATION_ENABLED (nó từng tắt nhầm cả worker).
+ * Muốn tắt hẳn sinh ảnh -> đặt IMAGE_PROVIDER=mock hoặc none.
  */
 export function checkImageGenerationContext(ctx?: ImageGenerationContext | null): ImageGuardDecision {
-  if (!readBoolEnvImg("IMAGE_GENERATION_ENABLED", true)) {
-    return { allowed: false, reason: "Sinh ảnh đang tắt (IMAGE_GENERATION_ENABLED=false).", code: "IMAGE_GENERATION_DISABLED" };
-  }
   const source = ctx?.source?.trim().toLowerCase() ?? "";
-  if (!source) {
-    return { allowed: false, reason: "Thiếu context sinh ảnh — chặn để không trừ tiền API ảnh.", code: IMAGE_BLOCKED_ERROR_CODE };
+  // 1) Denylist: quét/import/validate sản phẩm TUYỆT ĐỐI không được sinh ảnh.
+  if (source && BLOCKED_IMAGE_SOURCES.has(source)) {
+    return {
+      allowed: false,
+      reason: `Context '${source}' không được phép gọi API ảnh (chống trừ tiền khi quét/import/validate sản phẩm).`,
+      code: IMAGE_BLOCKED_ERROR_CODE,
+    };
   }
-  if (BLOCKED_IMAGE_SOURCES.has(source)) {
-    return { allowed: false, reason: `Context '${source}' không được phép gọi API ảnh.`, code: IMAGE_BLOCKED_ERROR_CODE };
-  }
-  const strict = readBoolEnvImg("IMAGE_GENERATION_ALLOWED_ONLY_IN_CREATIVE_WORKER", true);
-  if (strict && !ALLOWED_IMAGE_SOURCES.has(source)) {
-    return { allowed: false, reason: `Context '${source}' nằm ngoài creative worker — chặn API ảnh.`, code: IMAGE_BLOCKED_ERROR_CODE };
+  // 2) (Tùy chọn) siết chặt: chỉ cho phép source creative. Mặc định TẮT để không chặn nhầm.
+  if (readBoolEnvImg("IMAGE_GENERATION_ALLOWED_ONLY_IN_CREATIVE_WORKER", false)) {
+    if (!ALLOWED_IMAGE_SOURCES.has(source)) {
+      return {
+        allowed: false,
+        reason: `Context '${source || "(trống)"}' nằm ngoài creative worker (đang bật chế độ siết).`,
+        code: IMAGE_BLOCKED_ERROR_CODE,
+      };
+    }
   }
   return { allowed: true, reason: null, code: null };
 }
@@ -226,7 +237,7 @@ export function getImageProviderConfig(): ImageProviderConfig {
   let imageModel: string | null = null;
 
   if (provider === "v98") {
-    imageModel = process.env.V98_IMAGE_MODEL?.trim() || "gpt-image-2";
+    imageModel = process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
     if (!hasV98Key) errors.push("V98_API_KEY is missing.");
     if (!v98BaseUrl) errors.push("V98_BASE_URL is missing.");
   } else if (provider === "grok_gateway") {
@@ -251,7 +262,7 @@ function resolveImageConfig(
     // 2 KEY tách biệt: ảnh dùng V98_IMAGE_* (fallback V98_* cũ). KHÔNG dùng key prompt cho ảnh.
     const apiKey = process.env.V98_IMAGE_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
     const baseURL = process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
-    const model = process.env.V98_IMAGE_MODEL?.trim() || "gpt-image-2";
+    const model = process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
     if (!apiKey || !baseURL) return null;
     return { apiKey, baseURL, model };
   }

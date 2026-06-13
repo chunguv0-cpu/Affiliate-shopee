@@ -828,7 +828,7 @@ export async function materializeImages(
   } else if (anyReady >= 1 && realReady === 0) {
     // Chỉ có ảnh mock.
     status = "PARTIAL";
-    creativeError = "Chỉ có ảnh mock — chưa đủ ảnh thật để đăng album. Đặt IMAGE_PROVIDER=v98 + V98_IMAGE_MODEL=gpt-image-2.";
+    creativeError = "Chỉ có ảnh mock — chưa đủ ảnh thật để đăng album. Đặt IMAGE_PROVIDER=v98 + V98_IMAGE_MODEL=<model V98 hợp lệ> (xem /api/debug/v98-models).";
   } else if (realReady >= 1) {
     status = "PARTIAL";
     creativeError = `Chưa đủ ảnh thật: ${realReady}/${MIN_ASSETS}.${firstErr ? " " + firstErr : ""}`;
