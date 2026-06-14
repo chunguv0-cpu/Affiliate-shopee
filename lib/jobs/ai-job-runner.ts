@@ -39,6 +39,9 @@ const ONE_AI_THREE_SOURCE = DEFAULT_PACK_MODE === "1_AI_3_SOURCE";
 const SOURCE_FIRST_PACK = DEFAULT_PACK_MODE === "2_SOURCE_2_AI";
 // 4_SOURCE_0_AI = 100% ảnh THẬT sản phẩm (4 slot), KHÔNG gọi API ảnh AI -> ảnh luôn giống SP + 0 tốn tiền ảnh.
 const ALL_SOURCE_ALBUM = DEFAULT_PACK_MODE === "4_SOURCE_0_AI";
+// Khi sản phẩm CHỈ có ít ảnh thật (Shopee chặn lấy gallery) -> slot lặp được img2img vẽ cảnh KHÁC
+// (giữ đúng SP) để album không trùng. Tốn thêm lượt ảnh (trong trần ngày). Tắt -> chỉ cắt ảnh khác.
+const FILL_DUP_WITH_AI = readBoolEnv("CREATIVE_FILL_DUP_WITH_AI", true);
 // 1_AI_3_SOURCE: KHÔNG dùng fast-source-album (4 nguồn, 0 AI) để đảm bảo có đúng 1 ảnh HERO AI.
 const FAST_SOURCE_ALBUM = ONE_AI_THREE_SOURCE ? false : readBoolEnv("AI_JOB_FAST_SOURCE_ALBUM", true);
 const FAST_SOURCE_ALBUM_MIN_IMAGES = readIntEnv("AI_JOB_FAST_SOURCE_ALBUM_MIN_IMAGES", 4, 1, 4);
@@ -198,11 +201,14 @@ async function storeSourceAlbumTail(options: {
   sourceOrigin: string | null;
   productName: string;
   overlays: string[];
-  prompts: Array<{ caption_overlay?: string | null; visual_angle?: string | null }>;
+  prompts: Array<{ prompt?: string | null; caption_overlay?: string | null; visual_angle?: string | null }>;
   startSortOrder: number;
   count: number;
   sourceStartIndex?: number;
   enhanced: boolean;
+  // Khi 1 ảnh thật bị dùng lại: dùng img2img vẽ cảnh KHÁC (giữ đúng SP) thay vì lặp ảnh.
+  fillDupWithAi?: boolean;
+  campaignRunId?: string | null;
 }): Promise<{ ok: boolean; storedCount: number; errors: string[] }> {
   const {
     supabase,
@@ -216,6 +222,8 @@ async function storeSourceAlbumTail(options: {
     count,
     sourceStartIndex = 1,
     enhanced: useEnhancement,
+    fillDupWithAi = false,
+    campaignRunId = null,
   } = options;
   await supabase
     .from("post_creative_assets")
@@ -246,25 +254,57 @@ async function storeSourceAlbumTail(options: {
       enhanced: useEnhancement,
       crop_variant: variant,
     };
-    const enhanced = useEnhancement
-      ? await enhanceAndStoreSourceProductImage(supabase, postId, sortOrder, src, {
-          generatedFrom: HYBRID_AI_FIRST_ALBUM ? "SHOPEE_SOURCE_HYBRID_TAIL_ENHANCED" : "SHOPEE_SOURCE_FAST_ALBUM_ENHANCED",
-          overlay: overlays[i] ?? promptForImage?.caption_overlay ?? "",
-          productName,
-          visualAngle: promptForImage?.visual_angle ?? null,
-          variant,
-          metadata,
-        })
-      : { ok: false, image_url: null, error: "source enhancement disabled" };
-    const stored = enhanced.ok
-      ? enhanced
-      : await storeSourceProductImage(supabase, postId, sortOrder, src, {
-          generatedFrom: HYBRID_AI_FIRST_ALBUM ? "SHOPEE_SOURCE_HYBRID_TAIL" : "SHOPEE_SOURCE_FAST_ALBUM",
-          captionOverlay: overlays[i] ?? promptForImage?.caption_overlay ?? "",
-          productName,
-          visualAngle: promptForImage?.visual_angle ?? null,
-          metadata: { ...metadata, enhanced: false, enhance_error: enhanced.error ?? null },
+
+    // Slot LẶP (variant>0): nếu cho phép -> img2img vẽ cảnh KHÁC dựa trên ảnh gốc (giữ đúng SP),
+    // đảm bảo album không trùng. Hết budget/lỗi -> fallback ảnh thật (crop khác).
+    let stored: { ok: boolean; image_url: string | null; error: string | null } | null = null;
+    if (variant > 0 && fillDupWithAi && promptForImage?.prompt) {
+      const ai = await generateAndStoreImageAsset(
+        supabase,
+        postId,
+        sortOrder,
+        {
+          prompt: promptForImage.prompt,
+          caption_overlay: overlays[i] ?? promptForImage?.caption_overlay ?? "",
+          visual_angle: promptForImage?.visual_angle ?? null,
+        },
+        {
+          campaignRunId,
+          referenceImageUrl: src,
+          context: { source: "creative_worker", job_type: JOB_TYPE, job_step: `AI_VARIANT_${sortOrder}` },
+        },
+      );
+      if (ai.ok) {
+        stored = { ok: true, image_url: ai.image_url, error: null };
+      } else {
+        await insertPostingLog(supabase, postId, "SOURCE_DUP_AI_FILL_FALLBACK", "FAILED", `img2img biến thể slot ${sortOrder} không tạo được (${ai.error ?? "?"}), dùng ảnh thật cắt khác.`, {
+          ai_job_id: null,
+          slot_index: sortOrder,
         });
+      }
+    }
+
+    if (!stored) {
+      const enhanced = useEnhancement
+        ? await enhanceAndStoreSourceProductImage(supabase, postId, sortOrder, src, {
+            generatedFrom: HYBRID_AI_FIRST_ALBUM ? "SHOPEE_SOURCE_HYBRID_TAIL_ENHANCED" : "SHOPEE_SOURCE_FAST_ALBUM_ENHANCED",
+            overlay: overlays[i] ?? promptForImage?.caption_overlay ?? "",
+            productName,
+            visualAngle: promptForImage?.visual_angle ?? null,
+            variant,
+            metadata,
+          })
+        : { ok: false, image_url: null, error: "source enhancement disabled" };
+      stored = enhanced.ok
+        ? enhanced
+        : await storeSourceProductImage(supabase, postId, sortOrder, src, {
+            generatedFrom: HYBRID_AI_FIRST_ALBUM ? "SHOPEE_SOURCE_HYBRID_TAIL" : "SHOPEE_SOURCE_FAST_ALBUM",
+            captionOverlay: overlays[i] ?? promptForImage?.caption_overlay ?? "",
+            productName,
+            visualAngle: promptForImage?.visual_angle ?? null,
+            metadata: { ...metadata, enhanced: false, enhance_error: enhanced.error ?? null },
+          });
+    }
     if (stored.ok) storedCount += 1;
     else if (stored.error) errors.push(stored.error);
   }
@@ -694,6 +734,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           count: 3,
           sourceStartIndex: 1,
           enhanced: ENHANCE_SOURCE_ALBUM,
+          fillDupWithAi: false, // 4_SOURCE_0_AI: giữ 0 ảnh AI -> ảnh lặp chỉ cắt khác.
         });
         if (tail.ok) {
           await insertPostingLog(
@@ -930,6 +971,8 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           count: HYBRID_SOURCE_IMAGE_COUNT,
           sourceStartIndex: 1,
           enhanced: ENHANCE_SOURCE_ALBUM,
+          fillDupWithAi: FILL_DUP_WITH_AI,
+          campaignRunId: job.ai_campaign_run_id ?? null,
         });
         if (!tail.ok) {
           await insertPostingLog(
@@ -970,6 +1013,8 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           count: Math.max(0, 4 - (aiTargetCount + 1)),
           sourceStartIndex: 0,
           enhanced: ENHANCE_SOURCE_ALBUM,
+          fillDupWithAi: FILL_DUP_WITH_AI,
+          campaignRunId: job.ai_campaign_run_id ?? null,
         });
         if (!tail.ok) {
           await insertPostingLog(
