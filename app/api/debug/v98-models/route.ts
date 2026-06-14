@@ -23,7 +23,7 @@ export async function GET(request: Request) {
   const baseURL = useImage
     ? process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim()
     : process.env.V98_PROMPT_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
-  const currentImageModel = process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
+  const currentImageModel = process.env.V98_IMAGE_MODEL?.trim() || "z-image-turbo";
 
   if (!apiKey || !baseURL) {
     return NextResponse.json(

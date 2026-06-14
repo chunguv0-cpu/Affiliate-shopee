@@ -101,7 +101,7 @@ async function V98KeyTab({ kind }: { kind: "prompt" | "image" }) {
     : process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
   const model = isPrompt
     ? process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || "(chưa đặt)"
-    : process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
+    : process.env.V98_IMAGE_MODEL?.trim() || "z-image-turbo";
   const usingFallback = isPrompt
     ? !process.env.V98_PROMPT_API_KEY?.trim() && !!process.env.V98_API_KEY?.trim()
     : !process.env.V98_IMAGE_API_KEY?.trim() && !!process.env.V98_API_KEY?.trim();

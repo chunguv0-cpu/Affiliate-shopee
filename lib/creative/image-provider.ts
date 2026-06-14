@@ -237,7 +237,7 @@ export function getImageProviderConfig(): ImageProviderConfig {
   let imageModel: string | null = null;
 
   if (provider === "v98") {
-    imageModel = process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
+    imageModel = process.env.V98_IMAGE_MODEL?.trim() || "z-image-turbo";
     if (!hasV98Key) errors.push("V98_API_KEY is missing.");
     if (!v98BaseUrl) errors.push("V98_BASE_URL is missing.");
   } else if (provider === "grok_gateway") {
@@ -262,7 +262,7 @@ function resolveImageConfig(
     // 2 KEY tách biệt: ảnh dùng V98_IMAGE_* (fallback V98_* cũ). KHÔNG dùng key prompt cho ảnh.
     const apiKey = process.env.V98_IMAGE_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
     const baseURL = process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
-    const model = process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
+    const model = process.env.V98_IMAGE_MODEL?.trim() || "z-image-turbo";
     if (!apiKey || !baseURL) return null;
     return { apiKey, baseURL, model };
   }

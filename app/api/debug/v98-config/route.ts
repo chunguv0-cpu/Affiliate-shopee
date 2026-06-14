@@ -38,7 +38,7 @@ export async function GET(request: Request) {
   const textModel = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || "gemini-2.5-flash (mặc định)";
   const imgKey = imageKey || sharedKey || "";
   const imgBase = process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim() || "";
-  const imgModel = process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
+  const imgModel = process.env.V98_IMAGE_MODEL?.trim() || "z-image-turbo";
 
   // Provider TEXT thực tế đang chạy (sau auto-detect). Nếu != v98 -> Prompt key KHÔNG được dùng.
   let resolvedAi = "(lỗi)";
@@ -78,7 +78,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true,
     // Dấu phiên bản: nếu KHÔNG thấy field này -> Vercel đang chạy CODE CŨ, cần redeploy.
-    build_marker: "hotfix-v13-debug-query-key-auth",
+    build_marker: "hotfix-v14-cheap-image-model-default",
     TEXT: {
       duong: "caption / vision / overlay / phân tích",
       key_dang_dung: textUsesPromptKey ? "V98_PROMPT_API_KEY" : sharedKey ? "V98_API_KEY (fallback)" : "(THIẾU)",
