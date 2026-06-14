@@ -328,8 +328,26 @@ function parseBundle(raw: string, product: ProductInput): AiPostBundle {
 }
 
 /**
+ * Danh sách model text V98 thử lần lượt: model cấu hình trước, rồi các model phổ biến hay có sẵn.
+ * Giúp vượt lỗi V98 503 "Something wrong" khi 1 model không khả dụng trên tài khoản.
+ */
+export function v98TextModelCandidates(primary: string): string[] {
+  const common = ["gpt-4o-mini", "gpt-4.1-mini", "gpt-3.5-turbo", "gemini-1.5-flash", "gpt-4o"];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of [primary, ...common]) {
+    const k = (m ?? "").trim().toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(m.trim());
+  }
+  return out;
+}
+
+/**
  * Một call text AI: caption + hook + 4 image prompts. KHÔNG throw (fallback mock).
  * opts.visualIdentity: nhận diện thị giác trích từ ảnh thật Shopee -> ground prompts.
+ * Tự thử nhiều model (v98) cho tới khi 1 model chạy được -> vượt lỗi 503 model không khả dụng.
  */
 export async function generateAffiliatePostBundle(
   product: ProductInput,
@@ -337,32 +355,52 @@ export async function generateAffiliatePostBundle(
 ): Promise<AiPostBundle> {
   const provider = getAIProvider();
   if (provider === "mock") return mockBundle(product);
+
+  let apiKey: string;
+  let baseURL: string | undefined;
+  let model: string;
   try {
-    const { apiKey, baseURL, model } = resolveProviderConfig(provider);
-    const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
-    const vi = (opts?.visualIdentity ?? "").trim();
-    const userContent = vi
-      ? `${buildBundleUserPrompt(product)}\n\nNHẬN DIỆN THỊ GIÁC SẢN PHẨM (bám sát tuyệt đối, từ ảnh thật Shopee):\n${vi}`
-      : buildBundleUserPrompt(product);
-    const completion = await client.chat.completions.create({
-      model,
-      temperature: 0.7,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: BUNDLE_SYSTEM_PROMPT },
-        { role: "user", content: userContent },
-      ],
-    });
-    await logTextApiUsage({ model, step: "bundle", success: true });
-    const raw = completion.choices[0]?.message?.content ?? "";
-    return parseBundle(raw, product);
+    ({ apiKey, baseURL, model } = resolveProviderConfig(provider));
   } catch (err) {
-    const reason = err instanceof Error ? err.message : "lỗi không xác định";
-    await logTextApiUsage({ model: process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || null, step: "bundle", success: false, errorMessage: reason });
-    // Hiện LÝ DO thật lên bài (thay vì "Mock mode" chung chung) để biết ngay vì sao rơi mock.
-    const fb = mockBundle(product);
-    return { ...fb, safety_notes: `⚠️ V98 text lỗi nên đang dùng nội dung tạm: ${reason}`.slice(0, 280) };
+    const reason = err instanceof Error ? err.message : "lỗi cấu hình";
+    await logTextApiUsage({ model: null, step: "bundle", success: false, errorMessage: reason });
+    return { ...mockBundle(product), safety_notes: `⚠️ V98 text lỗi cấu hình: ${reason}`.slice(0, 280) };
   }
+
+  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  const vi = (opts?.visualIdentity ?? "").trim();
+  const userContent = vi
+    ? `${buildBundleUserPrompt(product)}\n\nNHẬN DIỆN THỊ GIÁC SẢN PHẨM (bám sát tuyệt đối, từ ảnh thật Shopee):\n${vi}`
+    : buildBundleUserPrompt(product);
+  const candidates = provider === "v98" ? v98TextModelCandidates(model) : [model];
+
+  let lastErr = "Không gọi được model text nào.";
+  for (const m of candidates) {
+    try {
+      const completion = await client.chat.completions.create({
+        model: m,
+        temperature: 0.7,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: BUNDLE_SYSTEM_PROMPT },
+          { role: "user", content: userContent },
+        ],
+      });
+      await logTextApiUsage({ model: m, step: "bundle", success: true });
+      return parseBundle(completion.choices[0]?.message?.content ?? "", product);
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : "lỗi không xác định";
+      // thử model kế tiếp
+    }
+  }
+
+  await logTextApiUsage({ model: candidates[0] ?? null, step: "bundle", success: false, errorMessage: lastErr });
+  // Hiện LÝ DO thật lên bài (kèm số model đã thử) để biết ngay vì sao rơi mock.
+  const fb = mockBundle(product);
+  return {
+    ...fb,
+    safety_notes: `⚠️ V98 text lỗi (đã thử ${candidates.length} model: ${candidates.join(", ")}). Lỗi cuối: ${lastErr}`.slice(0, 280),
+  };
 }
 
 /**
@@ -524,8 +562,8 @@ export function resolveProviderConfig(provider: "v98" | "openai"): {
       process.env.V98_PROMPT_BASE_URL?.trim() ||
       process.env.V98_BASE_URL?.trim() ||
       process.env.V98_IMAGE_BASE_URL?.trim();
-    // model TEXT: nếu chưa đặt -> mặc định gemini-2.5-flash (KHÔNG ném lỗi để tránh rơi mock im lặng).
-    const model = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || "gemini-2.5-flash";
+    // model TEXT: nếu chưa đặt -> mặc định gpt-4o-mini (ổn định trên v98store; KHÔNG ném lỗi).
+    const model = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || "gpt-4o-mini";
     if (!apiKey) throw new Error("Thiếu V98_PROMPT_API_KEY (hoặc V98_API_KEY).");
     if (!baseURL) throw new Error("Thiếu V98_PROMPT_BASE_URL (hoặc V98_BASE_URL / V98_IMAGE_BASE_URL).");
     return { apiKey, baseURL, model };
