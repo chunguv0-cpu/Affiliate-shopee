@@ -31,8 +31,13 @@ export async function GET(request: Request) {
 
   // Resolve y hệt code thật.
   const textKey = promptKey || sharedKey || "";
-  const textBase = process.env.V98_PROMPT_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim() || "";
-  const textModel = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || "(THIẾU — sẽ lỗi)";
+  const textBase =
+    process.env.V98_PROMPT_BASE_URL?.trim() ||
+    process.env.V98_BASE_URL?.trim() ||
+    process.env.V98_IMAGE_BASE_URL?.trim() ||
+    "";
+  const textModelEnvSet = !!(process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim());
+  const textModel = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || "gemini-2.5-flash (mặc định)";
   const imgKey = imageKey || sharedKey || "";
   const imgBase = process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim() || "";
   const imgModel = process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
@@ -64,10 +69,13 @@ export async function GET(request: Request) {
   if (textKey && imgKey && textKey === imgKey) {
     warnings.push("🔴 TEXT và IMAGE đang dùng CÙNG một key → mọi chi phí dồn vào 1 key.");
   }
-  if (textModel.startsWith("(THIẾU")) {
-    warnings.push("⚠️ Thiếu V98_PROMPT_MODEL/V98_MODEL → sinh text sẽ lỗi.");
+  if (!textModelEnvSet) {
+    warnings.push("ℹ️ Chưa đặt V98_PROMPT_MODEL/V98_MODEL → text dùng mặc định 'gemini-2.5-flash'. Nếu V98 của bạn KHÔNG hỗ trợ model này, hãy đặt V98_PROMPT_MODEL = model text hợp lệ (xem /api/debug/v98-models?image=0).");
   }
-  warnings.push("ℹ️ Nếu V98 vẫn dùng model 'qwen' dù bạn đặt V98_IMAGE_MODEL: model đó V98 không hỗ trợ -> server tự đổi. Xem /api/debug/v98-models để chọn model hợp lệ.");
+  if (!textBase) {
+    warnings.push("🔴 Thiếu cả V98_PROMPT_BASE_URL / V98_BASE_URL / V98_IMAGE_BASE_URL → TEXT không gọi được V98 -> rơi mock. Hãy đặt V98_PROMPT_BASE_URL.");
+  }
+  warnings.push("ℹ️ Test text trực tiếp: /api/debug/v98-text. Nếu lỗi -> đó là lý do bài bị 'Mock mode'. Test ảnh: /api/debug/v98-models.");
 
   return NextResponse.json({
     ok: true,

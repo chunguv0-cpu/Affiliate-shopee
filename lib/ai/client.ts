@@ -59,11 +59,25 @@ export type GeneratedCaptionResult = {
  *   hoặc key chung) thì dùng "v98" để TEXT thật sự gọi V98 (Prompt key được dùng). Tránh tình
  *   trạng quên đặt AI_PROVIDER -> text chạy mock -> Prompt key không bao giờ bị trừ.
  */
+/** V98 text đã cấu hình ĐẦY ĐỦ chưa (key + base + model). */
+function isV98TextConfigured(): boolean {
+  const key = process.env.V98_PROMPT_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
+  const base = process.env.V98_PROMPT_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
+  const model = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim();
+  return !!(key && base && model);
+}
+
 export function getAIProvider(): AIProvider {
   const raw = process.env.AI_PROVIDER?.trim().toLowerCase();
 
-  if (raw === "mock" || raw === "v98" || raw === "openai") {
+  if (raw === "v98" || raw === "openai") {
     return raw;
+  }
+  if (raw === "mock") {
+    // Trên PRODUCTION nếu đã cấu hình đầy đủ V98 -> ưu tiên v98 (gỡ bẫy AI_PROVIDER=mock cũ còn sót
+    // trong env làm TEXT chạy mock + Prompt key không bao giờ bị trừ). Local vẫn tôn trọng mock.
+    if (process.env.NODE_ENV === "production" && isV98TextConfigured()) return "v98";
+    return "mock";
   }
   if (raw) {
     throw new Error(
@@ -73,10 +87,7 @@ export function getAIProvider(): AIProvider {
   }
 
   // CHƯA ĐẶT -> tự nhận diện.
-  const v98TextKey = process.env.V98_PROMPT_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
-  const v98TextBase = process.env.V98_PROMPT_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
-  const v98TextModel = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim();
-  if (v98TextKey && v98TextBase && v98TextModel) return "v98";
+  if (isV98TextConfigured()) return "v98";
   if (process.env.OPENAI_API_KEY?.trim()) return "openai";
   return "mock";
 }
@@ -502,14 +513,18 @@ export function resolveProviderConfig(provider: "v98" | "openai"): {
   model: string;
 } {
   if (provider === "v98") {
-    // 2 KEY tách biệt: text/prompt dùng V98_PROMPT_* (fallback V98_* cũ).
-    // KHÔNG bao giờ dùng key ảnh (V98_IMAGE_*) cho text.
+    // Text/prompt: ưu tiên V98_PROMPT_* -> key chung V98_*.
     const apiKey = process.env.V98_PROMPT_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
-    const baseURL = process.env.V98_PROMPT_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
-    const model = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim();
-    if (!apiKey) throw new Error("Thiếu V98_PROMPT_API_KEY (hoặc V98_API_KEY). Cấu hình trong .env.local.");
-    if (!baseURL) throw new Error("Thiếu V98_PROMPT_BASE_URL (hoặc V98_BASE_URL). Cấu hình trong .env.local.");
-    if (!model) throw new Error("Thiếu V98_PROMPT_MODEL (hoặc V98_MODEL). Cấu hình trong .env.local.");
+    // baseURL: prompt -> chung -> (last resort) base của ảnh. V98 thường CÙNG base URL cho text & ảnh,
+    // nên mượn base ảnh giúp text chạy được dù chưa đặt V98_PROMPT_BASE_URL/V98_BASE_URL.
+    const baseURL =
+      process.env.V98_PROMPT_BASE_URL?.trim() ||
+      process.env.V98_BASE_URL?.trim() ||
+      process.env.V98_IMAGE_BASE_URL?.trim();
+    // model TEXT: nếu chưa đặt -> mặc định gemini-2.5-flash (KHÔNG ném lỗi để tránh rơi mock im lặng).
+    const model = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || "gemini-2.5-flash";
+    if (!apiKey) throw new Error("Thiếu V98_PROMPT_API_KEY (hoặc V98_API_KEY).");
+    if (!baseURL) throw new Error("Thiếu V98_PROMPT_BASE_URL (hoặc V98_BASE_URL / V98_IMAGE_BASE_URL).");
     return { apiKey, baseURL, model };
   }
   const apiKey = process.env.OPENAI_API_KEY?.trim();
