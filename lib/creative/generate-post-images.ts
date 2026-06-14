@@ -10,6 +10,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAIProvider, resolveProviderConfig } from "@/lib/ai/client";
 import {
   generateImageFromPrompt,
+  generateImageFromReference,
   getImageProvider,
   getImageProviderConfig,
   type ImageGenerationContext,
@@ -890,7 +891,7 @@ export async function generateAndStoreImageAsset(
   postId: string,
   sortOrder: number,
   prompt: MinimalPrompt,
-  options: { force?: boolean; campaignRunId?: string | null; context?: ImageGenerationContext } = {},
+  options: { force?: boolean; campaignRunId?: string | null; context?: ImageGenerationContext; referenceImageUrl?: string | null } = {},
 ): Promise<{ ok: boolean; mock: boolean; image_url: string | null; error: string | null; blockedByBudget?: boolean }> {
   // Context creative (mặc định creative_worker) — guard chống trừ tiền ngoài creative worker.
   const imageContext: ImageGenerationContext = options.context ?? {
@@ -942,7 +943,32 @@ export async function generateAndStoreImageAsset(
     slot_index: sortOrder,
     prompt_hash: promptHash,
   });
-  const r = await generateImageFromPrompt(cleanPrompt, imageContext);
+  // IMG2IMG: nếu bật + có ảnh tham chiếu thật -> AI vẽ DỰA trên ảnh gốc (giữ đúng sản phẩm).
+  // Lỗi/không hỗ trợ -> fallback text-to-image. Vẫn chỉ tốn đúng 1 lượt ảnh/bài.
+  let r: PromptImageResult;
+  const useImg2Img = readBoolEnv("CREATIVE_HERO_IMG2IMG", true) && !!options.referenceImageUrl;
+  if (useImg2Img) {
+    const ref = await fetchImageBuffer(options.referenceImageUrl as string);
+    if (ref.buffer) {
+      r = await generateImageFromReference(cleanPrompt, ref.buffer, ref.contentType, imageContext);
+      if (r.status !== "READY") {
+        await insertPostingLog(supabase, postId, "IMG2IMG_FALLBACK_TEXT2IMG", "FAILED", `img2img lỗi (${r.error ?? "?"}), chuyển text-to-image.`, {
+          generated_post_id: postId,
+          slot_index: sortOrder,
+        });
+        r = await generateImageFromPrompt(cleanPrompt, imageContext);
+      } else {
+        await insertPostingLog(supabase, postId, "IMG2IMG_USED_REFERENCE", "SUCCESS", `Sinh ảnh AI dựa trên ảnh thật sản phẩm (slot ${sortOrder}).`, {
+          generated_post_id: postId,
+          slot_index: sortOrder,
+        });
+      }
+    } else {
+      r = await generateImageFromPrompt(cleanPrompt, imageContext);
+    }
+  } else {
+    r = await generateImageFromPrompt(cleanPrompt, imageContext);
+  }
   if (r.status !== "READY") {
     await insertPostingLog(supabase, postId, V98_CALL_FAILED, "FAILED", r.error ?? `Image provider failed for slot ${sortOrder}.`, {
       generated_post_id: postId,

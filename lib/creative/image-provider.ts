@@ -1,6 +1,6 @@
 import "server-only";
 
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 
 import { logImageApiUsage } from "@/lib/cost/api-usage-log";
 
@@ -416,6 +416,91 @@ export async function generateImageFromPrompt(
   }
   await logProviderCall(false, lastError);
   return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED", error: lastError };
+}
+
+/**
+ * IMG2IMG — Sinh ảnh AI DỰA TRÊN ảnh thật sản phẩm (image edit, OpenAI-compatible /images/edits).
+ * Nạp THẲNG bytes ảnh gốc vào model -> AI giữ đúng sản phẩm, chỉ làm đẹp bố cục/nền/ánh sáng.
+ * KHÔNG throw. Lỗi/endpoint không hỗ trợ -> trả FAILED để caller fallback text-to-image.
+ * Chỉ dùng cho v98/openai (đi qua guard như generateImageFromPrompt).
+ */
+export async function generateImageFromReference(
+  prompt: string,
+  referenceImage: Buffer,
+  contentType: string,
+  context?: ImageGenerationContext,
+): Promise<PromptImageResult> {
+  const provider = getImageProvider();
+  if (provider !== "v98" && provider !== "openai") {
+    return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED", error: "img2img chỉ hỗ trợ provider v98/openai." };
+  }
+  // GUARD — không cho gọi ngoài creative.
+  const guard = checkImageGenerationContext(context);
+  if (!guard.allowed) {
+    await logImageApiUsage({
+      provider: usageProviderName(provider),
+      model: null,
+      keyType: usageKeyType(provider),
+      callType: "image_generation_blocked",
+      endpoint: null,
+      context: { ...(context ?? {}), mode: "img2img", guard_code: guard.code },
+      success: false,
+      errorMessage: guard.reason,
+    });
+    return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED", error: guard.code ?? IMAGE_BLOCKED_ERROR_CODE };
+  }
+  const cfg = resolveImageConfig(provider);
+  if (!cfg) {
+    return { b64: null, url: null, mock: false, provider, model: null, status: "FAILED", error: provider === "v98" ? "Thiếu V98_IMAGE_API_KEY/BASE_URL." : "Thiếu OPENAI_API_KEY." };
+  }
+  const usageEndpoint = cfg.baseURL ? `${cfg.baseURL.replace(/\/$/, "")}/images/edits` : "openai:images.edit";
+  const ext = /jpe?g/i.test(contentType) ? "jpg" : "png";
+  const safePrompt =
+    `${prompt} GIỮ NGUYÊN đúng sản phẩm trong ảnh tham chiếu (cùng loại, hình khối, màu sắc, chi tiết thiết kế); ` +
+    `chỉ cải thiện nền/ánh sáng/bố cục cho đẹp hơn. KHÔNG đổi sang sản phẩm khác. ` +
+    `Hard visual constraints: ${TEXT_FREE_IMAGE_PROMPT_RULE}.`;
+  const timeoutMs = readIntEnv("IMAGE_PROVIDER_TIMEOUT_MS", 22_000, 5_000, 55_000);
+  const client = new OpenAI({ apiKey: cfg.apiKey, ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}) });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const file = await toFile(referenceImage, `reference.${ext}`, { type: contentType || "image/png" });
+    const res = (await client.images.edit(
+      { model: cfg.model, image: file, prompt: safePrompt, n: 1, size: "1024x1024" } as unknown as Parameters<typeof client.images.edit>[0],
+      { signal: controller.signal } as never,
+    )) as unknown as { data?: Array<{ b64_json?: string | null; url?: string | null }> };
+    const b64 = res.data?.[0]?.b64_json ?? null;
+    const url = res.data?.[0]?.url ?? null;
+    const ok = !!(b64 || url);
+    await logImageApiUsage({
+      provider: usageProviderName(provider),
+      model: cfg.model,
+      keyType: usageKeyType(provider),
+      callType: "image_edit",
+      endpoint: usageEndpoint,
+      context: { ...(context ?? {}), mode: "img2img" },
+      success: ok,
+      errorMessage: ok ? null : "No image returned from edit.",
+    });
+    if (b64) return { b64, url: null, mock: false, provider, model: cfg.model, status: "READY" };
+    if (url) return { b64: null, url, mock: false, provider, model: cfg.model, status: "READY" };
+    return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED", error: "No image returned from edit." };
+  } catch (err) {
+    const msg = err instanceof Error ? (err.name === "AbortError" ? "img2img timeout." : err.message.slice(0, 300)) : "img2img failed.";
+    await logImageApiUsage({
+      provider: usageProviderName(provider),
+      model: cfg.model,
+      keyType: usageKeyType(provider),
+      callType: "image_edit",
+      endpoint: usageEndpoint,
+      context: { ...(context ?? {}), mode: "img2img" },
+      success: false,
+      errorMessage: msg,
+    });
+    return { b64: null, url: null, mock: false, provider, model: cfg.model, status: "FAILED", error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** 4 phong cách ảnh creative (lifestyle / use-case / spotlight / benefit). */

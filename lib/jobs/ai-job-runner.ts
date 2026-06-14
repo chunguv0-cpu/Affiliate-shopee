@@ -843,8 +843,12 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       if (!p || !p.prompt) return failStep(`Thiếu prompt ảnh #${idx}.`);
       // Gán overlay text -> generateAndStoreImageAsset sẽ render chữ lên ảnh.
       const pWithOverlay = { ...p, caption_overlay: overlays[idx - 1] ?? p.caption_overlay ?? "" };
+      // Ảnh thật sản phẩm làm tham chiếu cho img2img (AI vẽ DỰA trên ảnh gốc -> giữ đúng sản phẩm).
+      const refImages = cleanSourceImages(out.source_images);
+      const referenceImageUrl = refImages[0] ?? null;
       const res = await generateAndStoreImageAsset(supabase, postId, sortOrder, pWithOverlay, {
         campaignRunId: job.ai_campaign_run_id ?? null,
+        referenceImageUrl,
         // Context creative worker — chỉ ở đây V98 Image Key mới được phép bị trừ tiền.
         context: {
           source: "creative_worker",
