@@ -1182,6 +1182,8 @@ export async function enhanceAndStoreSourceProductImage(
     visualAngle?: string | null;
     generatedFrom?: string;
     metadata?: Record<string, unknown>;
+    /** >0 = ảnh thật bị dùng lại -> cắt/zoom khác để 2 slot không trùng y hệt. */
+    variant?: number;
   } = {},
 ): Promise<{ ok: boolean; image_url: string | null; error: string | null }> {
   const src = (imageUrl ?? "").trim();
@@ -1194,11 +1196,14 @@ export async function enhanceAndStoreSourceProductImage(
     const fetched = await fetchImageBuffer(src);
     if (!fetched.buffer) return { ok: false, image_url: null, error: fetched.error };
     const sharp = (await import("sharp")).default;
-    const base = await sharp(fetched.buffer)
-      .rotate()
-      .resize(1024, 1024, { fit: "contain", background: "#f8fafc" })
-      .png()
-      .toBuffer();
+    // variant>0: ảnh thật bị dùng lại -> cắt theo vị trí khác (cover) để KHÔNG trùng y hệt slot trước.
+    const variant = options.variant ?? 0;
+    const cropPositions = ["centre", "top", "bottom", "left", "right"] as const;
+    const resizeOpts =
+      variant > 0
+        ? { fit: "cover" as const, position: cropPositions[variant % cropPositions.length] }
+        : { fit: "contain" as const, background: "#f8fafc" };
+    const base = await sharp(fetched.buffer).rotate().resize(1024, 1024, resizeOpts).png().toBuffer();
     const overlaySvg = buildEnhancementSvg({
       overlay,
       productName,

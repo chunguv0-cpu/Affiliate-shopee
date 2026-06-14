@@ -155,14 +155,39 @@ function secondsLeft(ms: number): number {
 
 function cleanSourceImages(images: unknown): string[] {
   if (!Array.isArray(images)) return [];
-  return Array.from(
-    new Set(
-      images
-        .filter((u): u is string => typeof u === "string")
-        .map((u) => u.trim())
-        .filter((u) => /^https?:\/\//i.test(u)),
-    ),
+  return dedupeSourceImages(
+    images.filter((u): u is string => typeof u === "string").map((u) => u.trim()),
   );
+}
+
+// Số ảnh nguồn MONG MUỐN để album có 4 ảnh KHÁC NHAU (1 hero + 3 tail).
+const DESIRED_SOURCE_IMAGES = 4;
+
+/** Khóa chuẩn hóa ảnh Shopee CDN: cùng hash /file/<hash> => cùng 1 ảnh (bỏ _tn/size/query). */
+function sourceImageKey(url: string): string {
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/\/file\/([a-z0-9]+)/i);
+    if (m) return `file:${m[1].toLowerCase()}`;
+    return (u.origin + u.pathname).toLowerCase();
+  } catch {
+    return url.trim().toLowerCase();
+  }
+}
+
+/** Dedupe ảnh nguồn theo ảnh THẬT (không tính biến thể size) -> tránh 3 slot trùng nhau. */
+function dedupeSourceImages(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of urls) {
+    const t = (u ?? "").trim();
+    if (!t || !/^https?:\/\//i.test(t)) continue;
+    const k = sourceImageKey(t);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out;
 }
 
 /** Chạy ĐÚNG MỘT bước của job. KHÔNG throw. */
@@ -201,12 +226,17 @@ async function storeSourceAlbumTail(options: {
 
   let storedCount = 0;
   const errors: string[] = [];
+  // Đếm số lần 1 ảnh thật bị dùng lại -> ảnh lặp sẽ được cắt/zoom KHÁC để không trùng y hệt.
+  const useCount = new Map<string, number>();
   for (let i = 0; i < count; i += 1) {
     const src = sourceImages[sourceStartIndex + i] ?? sourceImages[i] ?? sourceImages[0];
     if (!src) {
       errors.push(`Missing source image ${sourceStartIndex + i}.`);
       continue;
     }
+    const dupKey = sourceImageKey(src);
+    const variant = useCount.get(dupKey) ?? 0;
+    useCount.set(dupKey, variant + 1);
     const sortOrder = startSortOrder + i;
     const promptForImage = prompts[i];
     const metadata = {
@@ -214,6 +244,7 @@ async function storeSourceAlbumTail(options: {
       exact_product_evidence: true,
       hybrid_ai_first_album: HYBRID_AI_FIRST_ALBUM,
       enhanced: useEnhancement,
+      crop_variant: variant,
     };
     const enhanced = useEnhancement
       ? await enhanceAndStoreSourceProductImage(supabase, postId, sortOrder, src, {
@@ -221,6 +252,7 @@ async function storeSourceAlbumTail(options: {
           overlay: overlays[i] ?? promptForImage?.caption_overlay ?? "",
           productName,
           visualAngle: promptForImage?.visual_angle ?? null,
+          variant,
           metadata,
         })
       : { ok: false, image_url: null, error: "source enhancement disabled" };
@@ -422,7 +454,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           ? (prod!.source_product_images as unknown[]).filter((u): u is string => typeof u === "string" && isLikelyProductImage(u))
           : [];
         if (stored.length > 0) {
-          images = stored;
+          images = dedupeSourceImages(stored);
           sourceImageOrigin = "stored";
         } else if (typeof prod?.image_url === "string" && isLikelyProductImage(prod.image_url)) {
           images = [prod.image_url];
@@ -434,8 +466,9 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
       }
 
       // Strategy: Product Data Provider (Apify/custom_api) — nguồn API trả ảnh thật.
+      // Làm giàu khi CHƯA đủ ảnh KHÁC NHAU (merge, không ghi đè) để album không bị trùng ảnh.
       let providerDiag: Record<string, unknown> | null = null;
-      if (images.length === 0 && getProductDataProvider() !== "none") {
+      if (images.length < DESIRED_SOURCE_IMAGES && getProductDataProvider() !== "none") {
         const pr = await fetchProductDataFromProvider({
           affiliate_link: productAffiliateLink ?? input.affiliate_link ?? "",
           resolved_url: productOriginalUrl ?? input.original_url ?? null,
@@ -450,8 +483,8 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           productDataProviderImageCount: pr.image_urls?.length ?? 0,
         };
         if (pr.ok && pr.image_urls && pr.image_urls.length > 0) {
-          images = pr.image_urls;
-          sourceImageOrigin = "provider_api";
+          images = dedupeSourceImages([...images, ...pr.image_urls]);
+          if (!sourceImageOrigin) sourceImageOrigin = "provider_api";
           if (!productName && pr.product_name) productName = pr.product_name;
         }
       }
@@ -470,19 +503,21 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         ),
       );
       let finalUrl = sourceLinks[0] ?? "";
-      if (images.length === 0) {
+      // Làm giàu gallery khi chưa đủ ảnh KHÁC NHAU: gọi extract (gồm Shopee item API trả full ảnh),
+      // MERGE + dedupe theo ảnh thật. Dừng khi đã đủ DESIRED_SOURCE_IMAGES.
+      if (images.length < DESIRED_SOURCE_IMAGES) {
         for (const sourceLink of sourceLinks) {
           const ext = await extractShopeeProductImages(sourceLink);
           diagnostics = ext.diagnostics;
           finalUrl = ext.diagnostics.finalUrl ?? sourceLink;
           productUrl = finalUrl;
           if (ext.ok) {
-            images = ext.image_urls;
-            sourceImageOrigin = "shopee_server";
-            break;
+            images = dedupeSourceImages([...images, ...ext.image_urls]);
+            if (!sourceImageOrigin) sourceImageOrigin = "shopee_server";
+            if (images.length >= DESIRED_SOURCE_IMAGES) break;
           }
           const canonical = toCanonicalShopeeProductUrl(finalUrl);
-          if (canonical && canonical !== finalUrl) {
+          if (canonical && canonical !== finalUrl && images.length < DESIRED_SOURCE_IMAGES) {
             const canonicalExt = await extractShopeeProductImages(canonical);
             diagnostics = {
               ...canonicalExt.diagnostics,
@@ -491,9 +526,9 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
             finalUrl = canonicalExt.diagnostics.finalUrl ?? canonical;
             productUrl = finalUrl;
             if (canonicalExt.ok) {
-              images = canonicalExt.image_urls;
-              sourceImageOrigin = "shopee_server";
-              break;
+              images = dedupeSourceImages([...images, ...canonicalExt.image_urls]);
+              if (!sourceImageOrigin) sourceImageOrigin = "shopee_server";
+              if (images.length >= DESIRED_SOURCE_IMAGES) break;
             }
           }
         }
