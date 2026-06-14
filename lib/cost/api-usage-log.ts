@@ -48,6 +48,38 @@ export async function logImageApiUsage(input: ImageApiUsageInput): Promise<void>
   }
 }
 
+/**
+ * HOTFIX — log lượt gọi TEXT (caption/vision/overlay/phân tích) để thấy rõ:
+ * text dùng key nào (prompt vs fallback chung) + model gì + có đang ăn key ảnh không.
+ * KHÔNG log API key. KHÔNG throw.
+ */
+export async function logTextApiUsage(input: {
+  model?: string | null;
+  step: string; // vd caption | bundle | vision | overlay | infer
+  success: boolean;
+  errorMessage?: string | null;
+}): Promise<void> {
+  // Xác định text đang dùng key nào (KHÔNG log giá trị key, chỉ loại).
+  const hasPromptKey = !!process.env.V98_PROMPT_API_KEY?.trim();
+  const sharedKey = process.env.V98_API_KEY?.trim();
+  const imageKey = process.env.V98_IMAGE_API_KEY?.trim();
+  const keyType = hasPromptKey
+    ? "prompt"
+    : sharedKey && imageKey && sharedKey === imageKey
+      ? "shared_eq_image" // CẢNH BÁO: text đang trừ vào key ảnh
+      : "shared";
+  await logImageApiUsage({
+    provider: "v98_prompt",
+    model: input.model ?? null,
+    keyType,
+    callType: "text_generation",
+    endpoint: null,
+    context: { step: input.step },
+    success: input.success,
+    errorMessage: input.errorMessage ?? null,
+  });
+}
+
 export type ImageUsageSummary = {
   available: boolean;
   todayCount: number;

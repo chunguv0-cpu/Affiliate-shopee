@@ -37,6 +37,8 @@ const DEFAULT_PACK_MODE = process.env.CREATIVE_DEFAULT_PACK_MODE?.trim().toUpper
 // 1_AI_3_SOURCE = 1 ảnh AI HERO (slot 1, 1 lượt V98) + 3 ảnh nguồn Shopee enhance local (slot 2/3/4).
 const ONE_AI_THREE_SOURCE = DEFAULT_PACK_MODE === "1_AI_3_SOURCE";
 const SOURCE_FIRST_PACK = DEFAULT_PACK_MODE === "2_SOURCE_2_AI";
+// 4_SOURCE_0_AI = 100% ảnh THẬT sản phẩm (4 slot), KHÔNG gọi API ảnh AI -> ảnh luôn giống SP + 0 tốn tiền ảnh.
+const ALL_SOURCE_ALBUM = DEFAULT_PACK_MODE === "4_SOURCE_0_AI";
 // 1_AI_3_SOURCE: KHÔNG dùng fast-source-album (4 nguồn, 0 AI) để đảm bảo có đúng 1 ảnh HERO AI.
 const FAST_SOURCE_ALBUM = ONE_AI_THREE_SOURCE ? false : readBoolEnv("AI_JOB_FAST_SOURCE_ALBUM", true);
 const FAST_SOURCE_ALBUM_MIN_IMAGES = readIntEnv("AI_JOB_FAST_SOURCE_ALBUM_MIN_IMAGES", 4, 1, 4);
@@ -641,6 +643,55 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
         out.source_diagnostics && typeof out.source_diagnostics.sourceImageOrigin === "string"
           ? out.source_diagnostics.sourceImageOrigin
           : null;
+
+      // 4_SOURCE_0_AI: dùng 100% ảnh THẬT sản phẩm cho 4 slot, KHÔNG gọi API ảnh AI.
+      // Slot 1 đã lưu ở bước SOURCE; ở đây lưu slot 2/3/4 (tự nhân bản nếu ít ảnh) rồi FINALIZE.
+      if (ALL_SOURCE_ALBUM && sourceImages.length >= 1 && sourceOrigin !== "image_search_fallback") {
+        const tail = await storeSourceAlbumTail({
+          supabase,
+          postId,
+          sourceImages,
+          sourceOrigin,
+          productName: productInput.product_name,
+          overlays,
+          prompts: bundle.image_prompts.slice(1),
+          startSortOrder: 2,
+          count: 3,
+          sourceStartIndex: 1,
+          enhanced: ENHANCE_SOURCE_ALBUM,
+        });
+        if (tail.ok) {
+          await insertPostingLog(
+            supabase,
+            postId,
+            SOURCE_ALBUM_READY,
+            "SUCCESS",
+            "Dùng 100% ảnh thật sản phẩm (4_SOURCE_0_AI) — KHÔNG gọi API ảnh AI, ảnh khớp đúng sản phẩm.",
+            { ai_job_id: jobId, source_image_count: sourceImages.length },
+          );
+          return advance("FINALIZE", {
+            attempts: 0,
+            output: {
+              ...out,
+              image_prompts: bundle.image_prompts.slice(0, 1),
+              overlays,
+              ai_score: bundle.score,
+              should_publish: bundle.should_publish,
+              all_source_album: true,
+            },
+          });
+        }
+        await insertPostingLog(
+          supabase,
+          postId,
+          SOURCE_ALBUM_READY,
+          "FAILED",
+          `4_SOURCE_0_AI: chưa lưu đủ ảnh thật (${tail.storedCount}/3). ${tail.errors[0] ?? ""}`.slice(0, 500),
+          { ai_job_id: jobId },
+        );
+        // rơi xuống nhánh thường bên dưới (sẽ dùng AI) nếu không đủ ảnh thật.
+      }
+
       const canUseFastSourceAlbum =
         FAST_SOURCE_ALBUM &&
         sourceImages.length >= FAST_SOURCE_ALBUM_MIN_IMAGES &&

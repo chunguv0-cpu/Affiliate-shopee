@@ -11,6 +11,7 @@ import {
   buildInferProductUserPrompt,
 } from "@/lib/ai/prompt";
 import { safeParseAIJson } from "@/lib/ai/json";
+import { logTextApiUsage } from "@/lib/cost/api-usage-log";
 
 /**
  * AI Provider Layer.
@@ -332,9 +333,11 @@ export async function generateAffiliatePostBundle(
         { role: "user", content: userContent },
       ],
     });
+    await logTextApiUsage({ model, step: "bundle", success: true });
     const raw = completion.choices[0]?.message?.content ?? "";
     return parseBundle(raw, product);
-  } catch {
+  } catch (err) {
+    await logTextApiUsage({ model: process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || null, step: "bundle", success: false, errorMessage: err instanceof Error ? err.message : "error" });
     return mockBundle(product);
   }
 }
@@ -373,10 +376,12 @@ export async function summarizeProductVisualIdentity(
         { role: "user", content: content as any },
       ],
     });
+    await logTextApiUsage({ model, step: "vision", success: true });
     const text = completion.choices[0]?.message?.content;
     const out = typeof text === "string" ? text.trim() : "";
     return out || fallback;
-  } catch {
+  } catch (err) {
+    await logTextApiUsage({ model: process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || null, step: "vision", success: false, errorMessage: err instanceof Error ? err.message : "error" });
     return fallback;
   }
 }
@@ -416,6 +421,7 @@ export async function generateOverlayTextPack(ctx: {
         { role: "user", content: user },
       ],
     });
+    await logTextApiUsage({ model, step: "overlay", success: true });
     const raw = completion.choices[0]?.message?.content ?? "";
     const start = raw.indexOf("{");
     const end = raw.lastIndexOf("}");
