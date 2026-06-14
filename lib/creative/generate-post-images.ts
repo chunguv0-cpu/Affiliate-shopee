@@ -1171,6 +1171,118 @@ export async function storeSourceProductImage(
   return { ok: true, image_url: up.url, error: null };
 }
 
+// ===========================================================================
+// HOTFIX — "Marketing card" cho ảnh GỐC: mỗi slot 1 style KHÁC (nền/màu/khung/crop/CTA)
+// để 3 ảnh thật trông đẹp + khác nhau rõ mà KHÔNG tốn API. Không thêm rating/giá giả.
+// ===========================================================================
+type SourceSlotStyle = {
+  name: string;
+  bg0: string;
+  bg1: string;
+  accent: string;
+  dark: string;
+  badge: string;
+  cta: string;
+  fit: "contain" | "cover";
+  position: "centre" | "top" | "bottom" | "left" | "right";
+};
+const SOURCE_SLOT_STYLES: SourceSlotStyle[] = [
+  { name: "studio", bg0: "#eef2ff", bg1: "#ffffff", accent: "#2563eb", dark: "#0f172a", badge: "Gợi ý hôm nay", cta: "Xem ngay", fit: "contain", position: "centre" },
+  { name: "deal", bg0: "#fff1f2", bg1: "#ffe4e6", accent: "#e11d48", dark: "#881337", badge: "Đang được chọn", cta: "Mua ngay", fit: "cover", position: "top" },
+  { name: "fresh", bg0: "#ecfdf5", bg1: "#d1fae5", accent: "#059669", dark: "#064e3b", badge: "Đáng trải nghiệm", cta: "Tìm hiểu", fit: "cover", position: "centre" },
+  { name: "detail", bg0: "#f5f3ff", bg1: "#ede9fe", accent: "#7c3aed", dark: "#4c1d95", badge: "Cận cảnh chi tiết", cta: "Xem ngay", fit: "cover", position: "bottom" },
+];
+
+function buildSourceOverlaySvg(st: SourceSlotStyle, overlay: string, slot: number): Buffer {
+  const S = 1024;
+  const badge = normalizeOverlayText(st.badge, 22);
+  const cta = normalizeOverlayText(st.cta, 14);
+  const overlayLines = splitOverlayLines(normalizeOverlayText(overlay, 36), 24, 2);
+  const cardW = estimateCardWidth(overlayLines);
+  const cardH = overlayLines.length >= 2 ? 132 : overlayLines.length === 1 ? 86 : 0;
+  const cardX = slot % 2 === 0 ? 58 : S - cardW - 58;
+  const cardY = S - cardH - 56;
+
+  const badgePath = textPath(badge, { x: 92, y: 78, size: 26, fill: "#ffffff" });
+  const ctaPath = textPath(cta, { x: S - 196, y: 80, size: 24, fill: "#ffffff", anchor: "center top" });
+  const lineA = textPath(overlayLines[0] ?? "", { x: cardX + 50, y: cardY + 26, size: 36, fill: st.dark });
+  const lineB = textPath(overlayLines[1] ?? "", { x: cardX + 50, y: cardY + 74, size: 32, fill: st.dark });
+  const badgeW = Math.min(420, 84 + Array.from(badge).length * 16);
+  const showCard = Boolean(lineA || lineB);
+
+  return Buffer.from(`
+<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0f172a" flood-opacity="0.22"/></filter>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.22"/></linearGradient>
+  </defs>
+  ${badge ? `<g filter="url(#sh)"><rect x="48" y="48" rx="22" ry="22" width="${badgeW}" height="58" fill="${st.accent}" fill-opacity="0.95"/>${badgePath}</g>` : ""}
+  ${cta ? `<g filter="url(#sh)"><rect x="${S - 220}" y="50" rx="26" ry="26" width="172" height="54" fill="${st.accent}"/>${ctaPath}</g>` : ""}
+  ${showCard ? `<rect x="0" y="${S - 250}" width="${S}" height="250" fill="url(#fade)"/>` : ""}
+  ${showCard ? `<g filter="url(#sh)">
+      <rect x="${cardX}" y="${cardY}" rx="24" ry="24" width="${cardW}" height="${cardH}" fill="#ffffff" fill-opacity="0.94"/>
+      <rect x="${cardX + 18}" y="${cardY + 14}" rx="6" ry="6" width="10" height="${cardH - 28}" fill="${st.accent}"/>
+      ${lineA}${lineB}
+    </g>` : ""}
+</svg>`);
+}
+
+/**
+ * Render 1 ảnh GỐC thành "marketing card" theo style của slot: nền gradient riêng, khung bo góc + bóng,
+ * crop/fit riêng, badge + CTA + overlay. Mỗi slot khác nhau rõ. KHÔNG gọi API. KHÔNG claim giả.
+ */
+async function composeSourceMarketingImage(
+  buffer: Buffer,
+  opts: { slot: number; overlay: string },
+): Promise<Buffer> {
+  const sharp = (await import("sharp")).default;
+  const S = 1024;
+  const st = SOURCE_SLOT_STYLES[Math.max(0, opts.slot) % SOURCE_SLOT_STYLES.length];
+
+  // 1) Nền gradient + vòng tròn trang trí (chiều sâu).
+  const bg = await sharp(
+    Buffer.from(
+      `<svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
+        <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${st.bg0}"/><stop offset="1" stop-color="${st.bg1}"/></linearGradient></defs>
+        <rect width="${S}" height="${S}" fill="url(#bg)"/>
+        <circle cx="175" cy="165" r="150" fill="#ffffff" fill-opacity="0.35"/>
+        <circle cx="890" cy="300" r="195" fill="#ffffff" fill-opacity="0.20"/>
+      </svg>`,
+    ),
+  )
+    .png()
+    .toBuffer();
+
+  // 2) Ảnh sản phẩm -> khung bo góc + bóng đổ; fit/position theo style -> crop khác mỗi slot.
+  const region = 884;
+  const padTop = 78;
+  const left = Math.round((S - region) / 2);
+  let prod = await sharp(buffer)
+    .rotate()
+    .resize(region, region, { fit: st.fit, position: st.position, background: "#ffffff" })
+    .png()
+    .toBuffer();
+  const roundMask = Buffer.from(`<svg width="${region}" height="${region}" xmlns="http://www.w3.org/2000/svg"><rect rx="40" ry="40" width="${region}" height="${region}"/></svg>`);
+  prod = await sharp(prod).composite([{ input: roundMask, blend: "dest-in" }]).png().toBuffer();
+  const shadow = await sharp(
+    Buffer.from(`<svg width="${region + 60}" height="${region + 60}" xmlns="http://www.w3.org/2000/svg"><rect x="30" y="36" rx="46" ry="46" width="${region}" height="${region}" fill="#0f172a" fill-opacity="0.20"/></svg>`),
+  )
+    .blur(20)
+    .png()
+    .toBuffer();
+
+  // 3) Overlay badge/CTA/text + ghép.
+  const overlaySvg = buildSourceOverlaySvg(st, opts.overlay ?? "", opts.slot);
+  return sharp(bg)
+    .composite([
+      { input: shadow, top: padTop - 18, left: left - 30 },
+      { input: prod, top: padTop, left },
+      { input: overlaySvg, top: 0, left: 0 },
+    ])
+    .png({ quality: 92, compressionLevel: 8 })
+    .toBuffer();
+}
+
 export async function enhanceAndStoreSourceProductImage(
   supabase: SupabaseClient,
   postId: string,
@@ -1196,25 +1308,21 @@ export async function enhanceAndStoreSourceProductImage(
     const fetched = await fetchImageBuffer(src);
     if (!fetched.buffer) return { ok: false, image_url: null, error: fetched.error };
     const sharp = (await import("sharp")).default;
-    // variant>0: ảnh thật bị dùng lại -> cắt theo vị trí khác (cover) để KHÔNG trùng y hệt slot trước.
-    const variant = options.variant ?? 0;
-    const cropPositions = ["centre", "top", "bottom", "left", "right"] as const;
-    const resizeOpts =
-      variant > 0
-        ? { fit: "cover" as const, position: cropPositions[variant % cropPositions.length] }
-        : { fit: "contain" as const, background: "#f8fafc" };
-    const base = await sharp(fetched.buffer).rotate().resize(1024, 1024, resizeOpts).png().toBuffer();
-    const overlaySvg = buildEnhancementSvg({
-      overlay,
-      productName,
-      visualAngle: options.visualAngle ?? null,
-      sortOrder,
-      template: creativeTemplate,
-    });
-    const enhanced = await sharp(base)
-      .composite([{ input: overlaySvg, top: 0, left: 0 }])
-      .png({ quality: 92, compressionLevel: 8 })
-      .toBuffer();
+    // "Marketing card" theo style của slot (nền/màu/khung/crop/badge/CTA khác nhau mỗi slot).
+    // slot = (variant nếu có) hoặc theo sortOrder -> mỗi ảnh gốc 1 style riêng. Lỗi -> fallback cách cũ.
+    const slotStyleIndex = options.variant && options.variant > 0 ? options.variant : Math.max(0, sortOrder - 1);
+    let enhanced: Buffer;
+    try {
+      enhanced = await composeSourceMarketingImage(fetched.buffer, { slot: slotStyleIndex, overlay });
+    } catch {
+      const base = await sharp(fetched.buffer)
+        .rotate()
+        .resize(1024, 1024, { fit: "cover", position: "center", background: "#f8fafc" })
+        .png()
+        .toBuffer();
+      const overlaySvg = buildEnhancementSvg({ overlay, productName, visualAngle: options.visualAngle ?? null, sortOrder, template: creativeTemplate });
+      enhanced = await sharp(base).composite([{ input: overlaySvg, top: 0, left: 0 }]).png({ quality: 92, compressionLevel: 8 }).toBuffer();
+    }
     const up = await uploadBuffer(supabase, postId, sortOrder, enhanced, "image/png");
     if (!up.url) return { ok: false, image_url: null, error: up.error ?? "Enhanced image upload failed." };
     if (!overlay) {
