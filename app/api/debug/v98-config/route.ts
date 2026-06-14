@@ -79,6 +79,8 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     ok: true,
+    // Dấu phiên bản: nếu KHÔNG thấy field này -> Vercel đang chạy CODE CŨ, cần redeploy.
+    build_marker: "hotfix-v8-text-borrow-base+img2img-fill+error-surface",
     TEXT: {
       duong: "caption / vision / overlay / phân tích",
       key_dang_dung: textUsesPromptKey ? "V98_PROMPT_API_KEY" : sharedKey ? "V98_API_KEY (fallback)" : "(THIẾU)",

@@ -357,8 +357,11 @@ export async function generateAffiliatePostBundle(
     const raw = completion.choices[0]?.message?.content ?? "";
     return parseBundle(raw, product);
   } catch (err) {
-    await logTextApiUsage({ model: process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || null, step: "bundle", success: false, errorMessage: err instanceof Error ? err.message : "error" });
-    return mockBundle(product);
+    const reason = err instanceof Error ? err.message : "lỗi không xác định";
+    await logTextApiUsage({ model: process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim() || null, step: "bundle", success: false, errorMessage: reason });
+    // Hiện LÝ DO thật lên bài (thay vì "Mock mode" chung chung) để biết ngay vì sao rơi mock.
+    const fb = mockBundle(product);
+    return { ...fb, safety_notes: `⚠️ V98 text lỗi nên đang dùng nội dung tạm: ${reason}`.slice(0, 280) };
   }
 }
 
