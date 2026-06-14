@@ -102,6 +102,14 @@ async function callGraphql(
   }
 }
 
+/** PUBLIC — gọi GraphQL Affiliate tùy ý (ký bằng key tài khoản). Dùng cho debug/introspection. */
+export async function callShopeeAffiliateGraphql(
+  cred: ShopeeApiCredential,
+  query: string,
+): Promise<{ ok: boolean; data?: Record<string, unknown>; error?: string; raw?: unknown }> {
+  return callGraphql(cred, query);
+}
+
 /**
  * Tìm offer sản phẩm theo từ khóa (productOfferV2). Trả danh sách offer của tài khoản.
  * Field schema có thể cần chỉnh sau khi test với key thật.
