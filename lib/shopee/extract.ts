@@ -112,48 +112,79 @@ export function toCanonicalShopeeProductUrl(url: string): string | null {
   return `https://shopee.vn/product/${shopId}/${itemId}`;
 }
 
+/** Parse item data (v4/item/get hoặc v4/pdp/get_pc) -> {name, images đầy đủ}. */
+function parseItemData(d: Record<string, unknown>): { name: string | null; images: string[] } {
+  const rawImages = Array.isArray((d as { images?: unknown }).images)
+    ? ((d as { images: unknown[] }).images as unknown[])
+    : (d as { image?: unknown }).image
+      ? [(d as { image: unknown }).image]
+      : [];
+  const images = rawImages
+    .filter((h): h is string => typeof h === "string" && h.length > 0)
+    .map((h) => (/^https?:\/\//i.test(h) ? h : IMG_CDN_BASE + h));
+  const name = typeof (d as { name?: unknown }).name === "string" ? (d as { name: string }).name : null;
+  return { name, images };
+}
+
 /**
- * Strategy item-metadata-by-ids: gọi API item công khai của Shopee (không cookie/login).
- * Có thể bị chặn -> trả null, ghi diagnostic, tiếp tục.
+ * Strategy item-metadata-by-ids: gọi API item CÔNG KHAI của Shopee để lấy TOÀN BỘ kho ảnh gallery
+ * (không cookie/login). Thử cả 2 endpoint v4/item/get và v4/pdp/get_pc + header giống trình duyệt.
+ * Có thể bị anti-bot chặn -> trả null, ghi diagnostic, tiếp tục.
  */
 async function fetchItemMetadata(
   shopId: string,
   itemId: string,
 ): Promise<{ name: string | null; images: string[] } | null> {
-  const api = `https://shopee.vn/api/v4/item/get?itemid=${encodeURIComponent(itemId)}&shopid=${encodeURIComponent(shopId)}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-  try {
-    const res = await fetch(api, {
-      method: "GET",
-      cache: "no-store",
-      signal: controller.signal,
-      headers: {
-        "User-Agent": UA,
-        Accept: "application/json",
-        "x-api-source": "pc",
-        Referer: "https://shopee.vn/",
-      },
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as { data?: Record<string, unknown> } | null;
-    const d = json?.data;
-    if (!d || typeof d !== "object") return null;
-    const rawImages = Array.isArray((d as { images?: unknown }).images)
-      ? ((d as { images: unknown[] }).images as unknown[])
-      : (d as { image?: unknown }).image
-        ? [(d as { image: unknown }).image]
-        : [];
-    const images = rawImages
-      .filter((h): h is string => typeof h === "string" && h.length > 0)
-      .map((h) => (/^https?:\/\//i.test(h) ? h : IMG_CDN_BASE + h));
-    const name = typeof (d as { name?: unknown }).name === "string" ? ((d as { name: string }).name) : null;
-    return { name, images };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
+  const endpoints = [
+    `https://shopee.vn/api/v4/item/get?itemid=${encodeURIComponent(itemId)}&shopid=${encodeURIComponent(shopId)}`,
+    `https://shopee.vn/api/v4/pdp/get_pc?item_id=${encodeURIComponent(itemId)}&shop_id=${encodeURIComponent(shopId)}&detail_level=0`,
+  ];
+  const headers: Record<string, string> = {
+    "User-Agent": UA,
+    Accept: "application/json",
+    "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+    "x-api-source": "pc",
+    "x-shopee-language": "vi",
+    "x-requested-with": "XMLHttpRequest",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+    Referer: `https://shopee.vn/product/${shopId}/${itemId}`,
+  };
+  for (const api of endpoints) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(api, { method: "GET", cache: "no-store", signal: controller.signal, headers });
+      if (!res.ok) continue;
+      const json = (await res.json()) as { data?: Record<string, unknown>; item?: Record<string, unknown> } | null;
+      // v4/item/get -> data; v4/pdp/get_pc -> data.item.
+      const dataItem =
+        json?.data && typeof json.data === "object"
+          ? (json.data as { item?: Record<string, unknown> }).item
+          : undefined;
+      const d = dataItem || json?.data || json?.item;
+      if (!d || typeof d !== "object") continue;
+      const parsed = parseItemData(d as Record<string, unknown>);
+      if (parsed.images.length > 0) return parsed;
+    } catch {
+      /* thử endpoint kế tiếp */
+    } finally {
+      clearTimeout(timeout);
+    }
   }
+  return null;
+}
+
+/**
+ * PUBLIC — Lấy TOÀN BỘ kho ảnh gallery của 1 sản phẩm Shopee qua item API (shop_id + item_id).
+ * Dùng khi quét/nhập để lưu hết ảnh thật ngay từ đầu. KHÔNG throw.
+ */
+export async function fetchShopeeItemGallery(
+  shopId: string,
+  itemId: string,
+): Promise<{ name: string | null; images: string[] }> {
+  const meta = await fetchItemMetadata(shopId, itemId);
+  return meta ?? { name: null, images: [] };
 }
 
 /** Resolve link affiliate -> URL cuối (follow redirect). Trả html luôn để tiết kiệm request. */

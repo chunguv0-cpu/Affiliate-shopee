@@ -80,7 +80,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true,
     // Dấu phiên bản: nếu KHÔNG thấy field này -> Vercel đang chạy CODE CŨ, cần redeploy.
-    build_marker: "hotfix-v9-text-model-fallback+default-gpt-4o-mini",
+    build_marker: "hotfix-v10-shopee-gallery-api+text-model-fallback",
     TEXT: {
       duong: "caption / vision / overlay / phân tích",
       key_dang_dung: textUsesPromptKey ? "V98_PROMPT_API_KEY" : sharedKey ? "V98_API_KEY (fallback)" : "(THIẾU)",

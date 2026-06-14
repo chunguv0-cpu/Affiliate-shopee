@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 
 import { deriveLinkStatus, generateSubId } from "@/lib/affiliate";
 import { searchProductOffers, type ShopeeApiCredential } from "@/lib/shopee/affiliate-api";
+import { fetchShopeeItemGallery } from "@/lib/shopee/extract";
+import { isLikelyProductImage } from "@/lib/shopee/image-url";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { ShopeeAccount } from "@/lib/types";
 
@@ -187,6 +189,25 @@ export async function scanAndImportShopeeProducts(
       });
       if (sample.length < 5) sample.push(name);
     }
+
+    // Lấy TOÀN BỘ kho ảnh gallery qua Shopee item API (shop_id + item_id) cho từng SP mới.
+    // Song song + best-effort: API bị chặn thì giữ ảnh offer (worker sẽ thử lại lúc tạo bài).
+    await Promise.allSettled(
+      rows.map(async (r) => {
+        const shopId = r.shop_id ? String(r.shop_id) : "";
+        const itemId = r.item_id ? String(r.item_id) : "";
+        if (!shopId || !itemId) return;
+        const g = await fetchShopeeItemGallery(shopId, itemId);
+        const valid = g.images.filter((u) => isLikelyProductImage(u));
+        if (valid.length === 0) return;
+        const existing = Array.isArray(r.source_product_images) ? (r.source_product_images as string[]) : [];
+        const merged = Array.from(new Set([...existing, ...valid])).slice(0, 9);
+        r.source_product_images = merged;
+        r.image_url = merged[0] ?? r.image_url;
+        r.source_capture_method = "shopee_item_api";
+        r.source_capture_status = "CAPTURED";
+      }),
+    );
 
     let created = 0;
     if (rows.length > 0) {
