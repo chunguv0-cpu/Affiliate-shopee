@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { getAIProvider } from "@/lib/ai/client";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -35,7 +37,18 @@ export async function GET(request: Request) {
   const imgBase = process.env.V98_IMAGE_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim() || "";
   const imgModel = process.env.V98_IMAGE_MODEL?.trim() || "nano-banana-2";
 
+  // Provider TEXT thực tế đang chạy (sau auto-detect). Nếu != v98 -> Prompt key KHÔNG được dùng.
+  let resolvedAi = "(lỗi)";
+  try {
+    resolvedAi = getAIProvider();
+  } catch (e) {
+    resolvedAi = e instanceof Error ? `(lỗi: ${e.message})` : "(lỗi)";
+  }
+
   const warnings: string[] = [];
+  if (resolvedAi !== "v98") {
+    warnings.push(`🔴 TEXT đang chạy '${resolvedAi}' (KHÔNG phải v98) → Prompt key KHÔNG hề bị trừ tiền vì text không gọi V98. Hãy đặt AI_PROVIDER=v98 + V98_PROMPT_API_KEY/V98_PROMPT_MODEL rồi Redeploy. (Điểm AI luôn 85 = dấu hiệu đang chạy mock.)`);
+  }
   // Text đang dùng key nào?
   const textUsesPromptKey = !!promptKey;
   if (!promptKey) {
@@ -79,7 +92,9 @@ export async function GET(request: Request) {
       prompt_khac_image: !!promptKey && !!imageKey && promptKey !== imageKey,
     },
     image_provider: process.env.IMAGE_PROVIDER?.trim() || "(auto)",
-    ai_provider: process.env.AI_PROVIDER?.trim() || "(mock)",
+    ai_provider_env: process.env.AI_PROVIDER?.trim() || "(chưa đặt)",
+    ai_provider_resolved: resolvedAi,
+    text_dung_v98: resolvedAi === "v98",
     warnings,
   });
 }

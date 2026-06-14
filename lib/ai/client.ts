@@ -52,24 +52,33 @@ export type GeneratedCaptionResult = {
 };
 
 /**
- * Xác định provider AI hiện tại từ biến môi trường AI_PROVIDER.
- * - Không có giá trị -> "mock".
+ * Xác định provider AI cho TEXT (caption/vision/overlay -> dùng Prompt key).
+ * - Có giá trị hợp lệ -> dùng đúng giá trị đó.
  * - Giá trị không hợp lệ -> ném lỗi rõ ràng.
+ * - CHƯA ĐẶT -> TỰ NHẬN DIỆN (giống IMAGE_PROVIDER): nếu đã cấu hình V98 (prompt key/base/model
+ *   hoặc key chung) thì dùng "v98" để TEXT thật sự gọi V98 (Prompt key được dùng). Tránh tình
+ *   trạng quên đặt AI_PROVIDER -> text chạy mock -> Prompt key không bao giờ bị trừ.
  */
 export function getAIProvider(): AIProvider {
   const raw = process.env.AI_PROVIDER?.trim().toLowerCase();
 
-  if (!raw) {
-    return "mock";
-  }
   if (raw === "mock" || raw === "v98" || raw === "openai") {
     return raw;
   }
+  if (raw) {
+    throw new Error(
+      `AI_PROVIDER không hợp lệ: "${process.env.AI_PROVIDER}". ` +
+        `Chỉ chấp nhận một trong: mock, v98, openai.`,
+    );
+  }
 
-  throw new Error(
-    `AI_PROVIDER không hợp lệ: "${process.env.AI_PROVIDER}". ` +
-      `Chỉ chấp nhận một trong: mock, v98, openai.`,
-  );
+  // CHƯA ĐẶT -> tự nhận diện.
+  const v98TextKey = process.env.V98_PROMPT_API_KEY?.trim() || process.env.V98_API_KEY?.trim();
+  const v98TextBase = process.env.V98_PROMPT_BASE_URL?.trim() || process.env.V98_BASE_URL?.trim();
+  const v98TextModel = process.env.V98_PROMPT_MODEL?.trim() || process.env.V98_MODEL?.trim();
+  if (v98TextKey && v98TextBase && v98TextModel) return "v98";
+  if (process.env.OPENAI_API_KEY?.trim()) return "openai";
+  return "mock";
 }
 
 /**
