@@ -42,6 +42,16 @@ const ALL_SOURCE_ALBUM = DEFAULT_PACK_MODE === "4_SOURCE_0_AI";
 // Khi sản phẩm CHỈ có ít ảnh thật (Shopee chặn lấy gallery) -> slot lặp được img2img vẽ cảnh KHÁC
 // (giữ đúng SP) để album không trùng. Tốn thêm lượt ảnh (trong trần ngày). Tắt -> chỉ cắt ảnh khác.
 const FILL_DUP_WITH_AI = readBoolEnv("CREATIVE_FILL_DUP_WITH_AI", true);
+// ÉP tail (slot 3,4...) thành các CẢNH AI KHÁC HẲN nhau (giữ 1 ảnh thật ở slot 2) -> 4 ảnh khác nhau
+// kể cả khi Shopee chỉ cho 1 ảnh. Tốn ~3 lượt ảnh/bài. Tắt -> CREATIVE_TAIL_DISTINCT_AI=false.
+const DISTINCT_AI_TAIL = readBoolEnv("CREATIVE_TAIL_DISTINCT_AI", true);
+// Các CẢNH khác nhau cho ảnh AI tail (mô tả tiếng Anh cho model ảnh) -> mỗi slot 1 cảnh riêng.
+const TAIL_AI_SCENES = [
+  "clean studio product shot on a minimal wooden surface, soft diffused lighting, plain background",
+  "real-life lifestyle scene, the product in everyday use, warm cozy home setting",
+  "close-up detail shot at a 45-degree angle, emphasizing material and texture, soft gradient background",
+  "outdoor lifestyle scene with natural daylight, dynamic modern composition",
+];
 // 1_AI_3_SOURCE: KHÔNG dùng fast-source-album (4 nguồn, 0 AI) để đảm bảo có đúng 1 ảnh HERO AI.
 const FAST_SOURCE_ALBUM = ONE_AI_THREE_SOURCE ? false : readBoolEnv("AI_JOB_FAST_SOURCE_ALBUM", true);
 const FAST_SOURCE_ALBUM_MIN_IMAGES = readIntEnv("AI_JOB_FAST_SOURCE_ALBUM_MIN_IMAGES", 4, 1, 4);
@@ -208,6 +218,8 @@ async function storeSourceAlbumTail(options: {
   enhanced: boolean;
   // Khi 1 ảnh thật bị dùng lại: dùng img2img vẽ cảnh KHÁC (giữ đúng SP) thay vì lặp ảnh.
   fillDupWithAi?: boolean;
+  // ÉP các slot tail (trừ slot đầu giữ ảnh thật) thành CẢNH AI khác hẳn nhau.
+  distinctAiTail?: boolean;
   campaignRunId?: string | null;
 }): Promise<{ ok: boolean; storedCount: number; errors: string[] }> {
   const {
@@ -223,6 +235,7 @@ async function storeSourceAlbumTail(options: {
     sourceStartIndex = 1,
     enhanced: useEnhancement,
     fillDupWithAi = false,
+    distinctAiTail = false,
     campaignRunId = null,
   } = options;
   await supabase
@@ -255,29 +268,34 @@ async function storeSourceAlbumTail(options: {
       crop_variant: variant,
     };
 
-    // Slot LẶP (variant>0): nếu cho phép -> img2img vẽ cảnh KHÁC dựa trên ảnh gốc (giữ đúng SP),
-    // đảm bảo album không trùng. Hết budget/lỗi -> fallback ảnh thật (crop khác).
+    // Quyết định slot này dùng ẢNH AI (cảnh khác) hay ảnh thật:
+    // - Giữ slot ĐẦU (i===0) là ẢNH THẬT để đảm bảo album có >=1 ảnh thật.
+    // - distinctAiTail: ép slot i>=1 thành CẢNH AI khác hẳn nhau (kể cả khi không trùng).
+    // - hoặc slot LẶP (variant>0) + fillDupWithAi: img2img cảnh khác để không trùng.
+    const wantAiScene = fillDupWithAi && i >= 1 && (distinctAiTail || variant > 0);
     let stored: { ok: boolean; image_url: string | null; error: string | null } | null = null;
-    if (variant > 0 && fillDupWithAi && promptForImage?.prompt) {
+    if (wantAiScene) {
+      const scene = TAIL_AI_SCENES[i % TAIL_AI_SCENES.length];
+      const aiPrompt = `${productName}. ${scene}. Photorealistic e-commerce product photography, clean and realistic.`;
       const ai = await generateAndStoreImageAsset(
         supabase,
         postId,
         sortOrder,
         {
-          prompt: promptForImage.prompt,
+          prompt: aiPrompt,
           caption_overlay: overlays[i] ?? promptForImage?.caption_overlay ?? "",
-          visual_angle: promptForImage?.visual_angle ?? null,
+          visual_angle: promptForImage?.visual_angle ?? `scene_${i}`,
         },
         {
           campaignRunId,
           referenceImageUrl: src,
-          context: { source: "creative_worker", job_type: JOB_TYPE, job_step: `AI_VARIANT_${sortOrder}` },
+          context: { source: "creative_worker", job_type: JOB_TYPE, job_step: `AI_SCENE_${sortOrder}` },
         },
       );
       if (ai.ok) {
         stored = { ok: true, image_url: ai.image_url, error: null };
       } else {
-        await insertPostingLog(supabase, postId, "SOURCE_DUP_AI_FILL_FALLBACK", "FAILED", `img2img biến thể slot ${sortOrder} không tạo được (${ai.error ?? "?"}), dùng ảnh thật cắt khác.`, {
+        await insertPostingLog(supabase, postId, "SOURCE_AI_SCENE_FALLBACK", "FAILED", `Cảnh AI slot ${sortOrder} không tạo được (${ai.error ?? "?"}), dùng ảnh thật cắt khác.`, {
           ai_job_id: null,
           slot_index: sortOrder,
         });
@@ -735,6 +753,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           sourceStartIndex: 1,
           enhanced: ENHANCE_SOURCE_ALBUM,
           fillDupWithAi: false, // 4_SOURCE_0_AI: giữ 0 ảnh AI -> ảnh lặp chỉ cắt khác.
+          distinctAiTail: false,
         });
         if (tail.ok) {
           await insertPostingLog(
@@ -972,6 +991,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           sourceStartIndex: 1,
           enhanced: ENHANCE_SOURCE_ALBUM,
           fillDupWithAi: FILL_DUP_WITH_AI,
+          distinctAiTail: DISTINCT_AI_TAIL,
           campaignRunId: job.ai_campaign_run_id ?? null,
         });
         if (!tail.ok) {
@@ -1014,6 +1034,7 @@ export async function runAiJobStep(jobId: string): Promise<RunStepResult> {
           sourceStartIndex: 0,
           enhanced: ENHANCE_SOURCE_ALBUM,
           fillDupWithAi: FILL_DUP_WITH_AI,
+          distinctAiTail: DISTINCT_AI_TAIL,
           campaignRunId: job.ai_campaign_run_id ?? null,
         });
         if (!tail.ok) {
