@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
 import { getAIProvider } from "@/lib/ai/client";
+import { debugAuthorized } from "@/lib/debug/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,11 +16,8 @@ export const maxDuration = 30;
  * GET /api/debug/v98-text
  */
 export async function GET(request: Request) {
-  if (process.env.NODE_ENV === "production") {
-    const secret = process.env.CRON_SECRET?.trim();
-    if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-    }
+  if (!debugAuthorized(request)) {
+    return NextResponse.json({ ok: false, error: "Unauthorized — thêm ?key=<CRON_SECRET> vào URL." }, { status: 401 });
   }
 
   let resolvedAi = "(lỗi)";

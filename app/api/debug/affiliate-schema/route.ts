@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { callShopeeAffiliateGraphql } from "@/lib/shopee/affiliate-api";
+import { debugAuthorized } from "@/lib/debug/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -14,11 +15,8 @@ export const maxDuration = 30;
  * GET /api/debug/affiliate-schema?account_id=...  (production cần Bearer CRON_SECRET)
  */
 export async function GET(request: Request) {
-  if (process.env.NODE_ENV === "production") {
-    const secret = process.env.CRON_SECRET?.trim();
-    if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-    }
+  if (!debugAuthorized(request)) {
+    return NextResponse.json({ ok: false, error: "Unauthorized — thêm ?key=<CRON_SECRET> vào URL." }, { status: 401 });
   }
   const sp = new URL(request.url).searchParams;
   let accountId = sp.get("account_id");

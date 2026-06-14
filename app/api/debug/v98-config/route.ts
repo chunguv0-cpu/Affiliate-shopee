@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getAIProvider } from "@/lib/ai/client";
+import { debugAuthorized } from "@/lib/debug/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,11 +19,8 @@ function mask(v: string | undefined | null): { set: boolean; tail: string; len: 
 }
 
 export async function GET(request: Request) {
-  if (process.env.NODE_ENV === "production") {
-    const secret = process.env.CRON_SECRET?.trim();
-    if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-    }
+  if (!debugAuthorized(request)) {
+    return NextResponse.json({ ok: false, error: "Unauthorized — thêm ?key=<CRON_SECRET> vào URL." }, { status: 401 });
   }
 
   const promptKey = process.env.V98_PROMPT_API_KEY?.trim();
@@ -80,7 +78,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true,
     // Dấu phiên bản: nếu KHÔNG thấy field này -> Vercel đang chạy CODE CŨ, cần redeploy.
-    build_marker: "hotfix-v12-affiliate-schema-introspect",
+    build_marker: "hotfix-v13-debug-query-key-auth",
     TEXT: {
       duong: "caption / vision / overlay / phân tích",
       key_dang_dung: textUsesPromptKey ? "V98_PROMPT_API_KEY" : sharedKey ? "V98_API_KEY (fallback)" : "(THIẾU)",
