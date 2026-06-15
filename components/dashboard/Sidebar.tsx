@@ -63,18 +63,22 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       ) : null}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-64 transform border-r border-gray-200 bg-white transition-transform duration-200 ease-in-out lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 transform flex-col border-r border-slate-200 bg-white transition-transform duration-200 ease-in-out lg:static lg:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="flex h-16 items-center gap-2 border-b border-gray-200 px-5">
-          <span className="text-xl">🤖</span>
-          <span className="text-base font-semibold text-gray-900">
-            Affiliate Agent
-          </span>
+        {/* Brand */}
+        <div className="flex h-16 items-center gap-3 border-b border-slate-100 px-5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 text-base shadow-sm shadow-blue-600/30">
+            🤖
+          </div>
+          <div className="leading-tight">
+            <div className="text-sm font-bold tracking-tight text-slate-900">Affiliate Agent</div>
+            <div className="text-[11px] font-medium text-slate-400">Shopee Auto · AI</div>
+          </div>
         </div>
 
-        <nav className="flex flex-col gap-1 p-3">
+        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3">
           {NAV_ITEMS.map((item) => {
             const active = isActive(pathname, item.href);
             return (
@@ -82,13 +86,17 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 key={item.href}
                 href={item.href}
                 onClick={onClose}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                aria-current={active ? "page" : undefined}
+                className={`group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
                   active
                     ? "bg-blue-50 text-blue-700"
-                    : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                 }`}
               >
-                <span className="text-lg" aria-hidden="true">
+                {active ? (
+                  <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-blue-600" aria-hidden="true" />
+                ) : null}
+                <span className={`text-lg transition-transform group-hover:scale-110 ${active ? "" : "grayscale-[35%] group-hover:grayscale-0"}`} aria-hidden="true">
                   {item.icon}
                 </span>
                 {item.label}
@@ -96,7 +104,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             );
           })}
 
-          <div className="mt-3 px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+          <div className="mt-4 px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
             Khác
           </div>
           {SECONDARY_NAV_ITEMS.map((item) => {
@@ -106,11 +114,15 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 key={item.href}
                 href={item.href}
                 onClick={onClose}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-                  active ? "bg-blue-50 text-blue-700" : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"
+                aria-current={active ? "page" : undefined}
+                className={`group relative flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-all ${
+                  active ? "bg-blue-50 font-medium text-blue-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
                 }`}
               >
-                <span className="text-base" aria-hidden="true">
+                {active ? (
+                  <span className="absolute left-0 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-blue-600" aria-hidden="true" />
+                ) : null}
+                <span className="text-base transition-transform group-hover:scale-110" aria-hidden="true">
                   {item.icon}
                 </span>
                 {item.label}
@@ -118,6 +130,17 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             );
           })}
         </nav>
+
+        {/* Footer */}
+        <div className="border-t border-slate-100 px-4 py-3">
+          <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+            </span>
+            <span className="text-[11px] font-medium text-slate-500">Hệ thống đang hoạt động</span>
+          </div>
+        </div>
       </aside>
     </>
   );
